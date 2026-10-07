@@ -1,0 +1,8 @@
+build/
+.build/
+RamClean.xcodeproj/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+.swiftpm/
+.claude/

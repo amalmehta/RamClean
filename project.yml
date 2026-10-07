@@ -1,0 +1,37 @@
+name: RamClean
+options:
+  bundleIdPrefix: com.amalmehta
+  deploymentTarget:
+    macOS: "14.0"
+packages:
+  RamCleanCore:
+    path: RamCleanCore
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+targets:
+  RamClean:
+    type: application
+    platform: macOS
+    sources: [App]
+    dependencies:
+      - package: RamCleanCore
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: RamClean
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.utilities
+        LSMinimumSystemVersion: "14.0"
+        NSHumanReadableCopyright: "© 2026 Amal Mehta"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.amalmehta.RamClean
+        PRODUCT_NAME: RamClean
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: NO
+        GENERATE_INFOPLIST_FILE: NO
+        COMBINE_HIDPI_IMAGES: YES

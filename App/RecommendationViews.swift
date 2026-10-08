@@ -101,6 +101,7 @@ struct RecommendationRow: View {
 struct DiskRecommendations: View {
     @EnvironmentObject var model: AppModel
     @State private var pending: DiskItem?
+    @State private var pendingMove: (item: DiskItem, folder: URL, name: String)?
     @State private var error: String?
 
     var body: some View {
@@ -116,7 +117,9 @@ struct DiskRecommendations: View {
                                 Text(kind.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 14)
                                 VStack(spacing: 0) {
                                     ForEach(items) { item in
-                                        DiskRow(item: item) { pending = item }
+                                        DiskRow(item: item, moving: model.movingPaths.contains(item.path),
+                                                onTrash: { pending = item },
+                                                onMove: { folder, name in pendingMove = (item, folder, name) })
                                         Divider().opacity(0.5)
                                     }
                                 }
@@ -141,7 +144,18 @@ struct DiskRecommendations: View {
         } message: { item in
             Text("\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))). \(item.caution ?? item.reason). You can put it back from the Trash until you empty it.")
         }
-        .alert("Couldn't move it to the Trash", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+        .confirmationDialog(pendingMove.map { "Move “\($0.item.name)” to \($0.name)?" } ?? "", isPresented: Binding(
+            get: { pendingMove != nil }, set: { if !$0 { pendingMove = nil } })) {
+            Button("Move") {
+                if let m = pendingMove { model.move(m.item, to: m.folder) { error = $0 } }
+                pendingMove = nil
+            }
+        } message: {
+            if let m = pendingMove {
+                Text("\(Format.bytes(UInt64(max(0, m.item.bytes ?? 0)))) will be copied to \(m.folder.path), then removed from this Mac once the copy is complete.")
+            }
+        }
+        .alert("That didn't work", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK") { error = nil }
         } message: { Text(error ?? "") }
     }
@@ -173,7 +187,11 @@ struct DiskRecommendations: View {
 
 struct DiskRow: View {
     var item: DiskItem
+    var moving: Bool
     var onTrash: () -> Void
+    var onMove: (URL, String) -> Void
+
+    private var canMove: Bool { item.kind == .largeFile || item.kind == .oldDownload }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -183,19 +201,29 @@ struct DiskRow: View {
                     Text(item.name).font(.body.weight(.medium)).lineLimit(1).truncationMode(.middle)
                     Text(item.bytes.map { Format.bytes(UInt64(max(0, $0))) } ?? "size unknown")
                         .font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                    if item.suggestMove {
+                        Text("Move off this Mac").font(.caption2.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.15), in: Capsule()).foregroundStyle(.blue)
+                    }
                 }
                 Text(item.reason).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let c = item.caution {
                     Label(c, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Text(item.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
                     .font(.caption2).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 6) {
-                if item.canTrash {
-                    Button("Move to Trash", action: onTrash).controlSize(.small)
-                        .accessibilityLabel("Move \(item.name) to Trash")
+                if moving {
+                    HStack(spacing: 4) { ProgressView().controlSize(.small); Text("Moving…").font(.caption) }
+                } else {
+                    if canMove { moveMenu }
+                    if item.canTrash {
+                        Button(item.kind == .unusedApp ? "Uninstall" : "Move to Trash", action: onTrash).controlSize(.small)
+                            .accessibilityLabel("Move \(item.name) to Trash")
+                    }
                 }
                 Button(item.kind == .trash ? "Open Trash" : "Show in Finder") {
                     let url = URL(fileURLWithPath: item.path)
@@ -205,5 +233,34 @@ struct DiskRow: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
+    }
+
+    /// Asks where to move it: any connected external drive, or a folder you pick.
+    private var moveMenu: some View {
+        Menu("Move to…") {
+            let drives = AppModel.externalVolumes()
+            if drives.isEmpty {
+                Text("No external drive connected")
+            } else {
+                Section("External drives") {
+                    ForEach(drives, id: \.url) { d in
+                        Button("\(d.name) (\(Format.bytes(UInt64(max(0, d.free)))) free)") { onMove(d.url, d.name) }
+                    }
+                }
+            }
+            Divider()
+            Button("Choose a folder…") {
+                let panel = NSOpenPanel()
+                panel.canChooseDirectories = true
+                panel.canChooseFiles = false
+                panel.canCreateDirectories = true
+                panel.prompt = "Move Here"
+                panel.message = "Choose where to move \(item.name)"
+                if panel.runModal() == .OK, let url = panel.url { onMove(url, url.lastPathComponent) }
+            }
+        }
+        .controlSize(.small)
+        .fixedSize()
+        .accessibilityLabel("Move \(item.name) to another drive or folder")
     }
 }

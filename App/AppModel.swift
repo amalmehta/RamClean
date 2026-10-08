@@ -18,10 +18,17 @@ final class AppModel: ObservableObject {
     @Published private(set) var isTraining = false
     @Published private(set) var diskReport: DiskReport?
     @Published private(set) var diskScanStep: String?
+    /// Paths being moved off the Mac right now.
+    @Published private(set) var movingPaths: Set<String> = []
+    /// Set by "Show recommendations" on an alert; the Overview opens that bar's list.
+    @Published var requestedPanel: UsagePanel?
+    /// Opens the main window; provided by a SwiftUI view that has `openWindow`.
+    var openMainWindow: (() -> Void)?
     @Published var prefs: Preferences {
         didSet {
             guard prefs != oldValue else { return }
             Self.savePrefs(prefs)
+            thresholds.prefs = prefs
             if prefs.checkInterval != oldValue.checkInterval { scheduleTimer() }
             tick()
         }
@@ -40,7 +47,9 @@ final class AppModel: ObservableObject {
     private var lastCredit = Date()
     private var lastNotified: [String: Date] = [:]
     private var lastAnyNotification: Date?
-    private var lastDiskWarning: Date?
+    private lazy var thresholds = ThresholdMonitor(prefs: prefs)
+    /// The disk alert waits for a fresh scan so it can name what to clear.
+    private var diskAlertWaitingForScan = false
     /// Apps RamClean quit, and when — for force-quit follow-ups and "regret" relabelling.
     private var quitByUs: [String: Date] = [:]
     private var observers: [NSObjectProtocol] = []
@@ -59,7 +68,7 @@ final class AppModel: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
-        notifier.onAction = { [weak self] action, key in self?.handle(action, key: key) }
+        notifier.onAction = { [weak self] action, info in self?.handle(action, info: info) }
         notifier.setUp()
         observeWorkspace()
         if let app = NSWorkspace.shared.frontmostApplication { frontmost = (Self.key(app), app.localizedName ?? "") }
@@ -106,7 +115,7 @@ final class AppModel: ObservableObject {
                                   lastAnyNotification: lastAnyNotification, now: now) {
             suggest(pick, system: snapshot, now: now)
         }
-        checkDisk(snapshot, now: now)
+        checkThresholds(snapshot, result, now: now)
     }
 
     /// Credits the frontmost app with the time since the last tick — but only while
@@ -178,14 +187,70 @@ final class AppModel: ObservableObject {
         refreshEvents()
     }
 
-    func handle(_ action: Notifier.Action, key: String) {
+    func handle(_ action: Notifier.Action, info: [AnyHashable: Any]) {
+        let key = info["key"] as? String ?? ""
+        let resource = (info["resource"] as? String).flatMap(Resource.init(rawValue:))
         switch action {
         case .quit: quit(key: key, source: "notification")
         case .keep: keep(key: key, always: false, source: "notification")
         case .alwaysKeep: keep(key: key, always: true, source: "notification")
         case .forceQuit: forceQuit(key: key)
-        case .open: NSApp.activate(ignoringOtherApps: true)
+        case .alertFix: applyAlertFix(info)
+        case .alertShow: if let resource { showRecommendations(resource) }
+        case .alertSnooze:
+            if let resource {
+                thresholds.snooze(resource, until: Date().addingTimeInterval(3600))
+                habitStore.log(.thresholdAlert, key: resource.rawValue, name: resource.title, detail: "snoozed for an hour", at: Date())
+                refreshEvents()
+            }
+        case .open:
+            if let resource { showRecommendations(resource) } else { NSApp.activate(ignoringOtherApps: true) }
         }
+    }
+
+    // MARK: - Threshold alerts
+
+    private func checkThresholds(_ s: SystemSnapshot, _ list: [Assessment], now: Date) {
+        for r in thresholds.update(s, now: now) {
+            switch r {
+            case .memory: sendAlert(AlertRecommender.memory(s, list))
+            case .cpu: sendAlert(AlertRecommender.cpu(s, list))
+            case .disk:
+                // Use a scan from the last 6 hours, or run one and alert when it's done.
+                if let report = diskReport, diskScanStep == nil, now.timeIntervalSince(report.scannedAt) < 6 * 3600 {
+                    sendAlert(AlertRecommender.disk(s, report))
+                } else {
+                    diskAlertWaitingForScan = true
+                    scanDisk()
+                }
+            }
+        }
+    }
+
+    private func sendAlert(_ content: AlertContent) {
+        notifier.alert(content)
+        lastAnyNotification = Date()
+        habitStore.log(.thresholdAlert, key: content.resource.rawValue, name: content.title, detail: content.body, at: Date())
+        refreshEvents()
+    }
+
+    /// The one-tap fix from an alert: quit the top app, or trash the biggest rebuildable cache.
+    private func applyAlertFix(_ info: [AnyHashable: Any]) {
+        guard let kind = (info["fixKind"] as? String).flatMap(AlertAction.Kind.init(rawValue:)),
+              let target = info["fixTarget"] as? String else { return }
+        switch kind {
+        case .quit: quit(key: target, source: "alert")
+        case .trash:
+            let item = diskReport?.items.first { $0.path == target }
+                ?? DiskItem(name: (target as NSString).lastPathComponent, path: target, bytes: nil, kind: .cache, reason: "")
+            if let error = moveToTrash(item) { notifier.problem("Couldn't move \(item.name) to the Trash", error) }
+        }
+    }
+
+    func showRecommendations(_ r: Resource) {
+        openMainWindow?()
+        NSApp.activate(ignoringOtherApps: true)
+        requestedPanel = UsagePanel(rawValue: r.rawValue)
     }
 
     func quit(key: String, source: String) {
@@ -250,8 +315,14 @@ final class AppModel: ObservableObject {
     func scanDisk() {
         guard diskScanStep == nil else { return }
         diskScanStep = "starting"
+        var scanner = DiskScanner()
+        scanner.staleDays = prefs.staleDays
+        scanner.activeDays = prefs.activeDays
+        let keep = prefs
+        scanner.isKept = { keep.matches(keep.alwaysKeep + keep.workTools, $0) }
+        scanner.runningAppPaths = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.path })
         DispatchQueue.global(qos: .utility).async {
-            let report = DiskScanner().scan(progress: { step, found in
+            let report = scanner.scan(progress: { step, found in
                 let partial = DiskReport(items: found.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }, scannedAt: Date())
                 DispatchQueue.main.async {
                     self.diskScanStep = step
@@ -261,6 +332,10 @@ final class AppModel: ObservableObject {
             DispatchQueue.main.async {
                 self.diskReport = report
                 self.diskScanStep = nil
+                if self.diskAlertWaitingForScan, let s = self.system {
+                    self.diskAlertWaitingForScan = false
+                    self.sendAlert(AlertRecommender.disk(s, report))
+                }
             }
         }
     }
@@ -282,6 +357,53 @@ final class AppModel: ObservableObject {
         return nil
     }
 
+    /// Drives you can move big files to (external and network volumes, not this Mac's own disk).
+    static func externalVolumes() -> [(name: String, url: URL, free: Int64)] {
+        let keys: [URLResourceKey] = [.volumeNameKey, .volumeIsInternalKey, .volumeIsRootFileSystemKey, .volumeIsBrowsableKey,
+                                      .volumeIsReadOnlyKey, .volumeAvailableCapacityKey]
+        let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
+        return urls.compactMap { url in
+            guard let v = try? url.resourceValues(forKeys: Set(keys)), v.volumeIsRootFileSystem != true,
+                  v.volumeIsInternal != true, v.volumeIsBrowsable != false, v.volumeIsReadOnly != true else { return nil }
+            return (v.volumeName ?? url.lastPathComponent, url, Int64(v.volumeAvailableCapacity ?? 0))
+        }
+    }
+
+    /// Moves a file off this Mac into `folder` (e.g. an external drive). It's copied, then
+    /// removed here only once the copy succeeded. Calls back on the main thread with an error message or nil.
+    func move(_ item: DiskItem, to folder: URL, done: @escaping (String?) -> Void) {
+        let source = URL(fileURLWithPath: item.path)
+        let free = (try? folder.resourceValues(forKeys: [.volumeAvailableCapacityKey]).volumeAvailableCapacity).flatMap { $0 }
+        if let free, let size = item.bytes, Int64(free) < size + 100 * 1_048_576 {
+            done("\(folder.lastPathComponent) only has \(Format.bytes(UInt64(free))) free; \(item.name) needs \(Format.bytes(UInt64(size))).")
+            return
+        }
+        var dest = folder.appendingPathComponent(source.lastPathComponent)
+        var n = 2
+        while FileManager.default.fileExists(atPath: dest.path) {
+            let base = source.deletingPathExtension().lastPathComponent, ext = source.pathExtension
+            dest = folder.appendingPathComponent(ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
+            n += 1
+        }
+        movingPaths.insert(item.path)
+        let target = dest
+        DispatchQueue.global(qos: .userInitiated).async {
+            var failure: String?
+            do { try FileManager.default.moveItem(at: source, to: target) } catch { failure = error.localizedDescription }
+            DispatchQueue.main.async {
+                self.movingPaths.remove(item.path)
+                if failure == nil {
+                    self.habitStore.log(.movedOffMac, key: "disk", name: item.name,
+                                        detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) → \(target.path)", at: Date())
+                    self.diskReport?.items.removeAll { $0.id == item.id }
+                    self.refreshEvents()
+                    self.tick()
+                }
+                done(failure)
+            }
+        }
+    }
+
     func resetModel() {
         model.reset()
         modelStatus = model.status
@@ -291,15 +413,6 @@ final class AppModel: ObservableObject {
         habitStore.clear()
         habits = []
         events = []
-    }
-
-    private func checkDisk(_ s: SystemSnapshot, now: Date) {
-        guard prefs.notificationsEnabled, s.diskFreeFraction * 100 < prefs.diskWarningPercent else { return }
-        if let last = lastDiskWarning, now.timeIntervalSince(last) < 24 * 3600 { return }
-        lastDiskWarning = now
-        notifier.diskWarning(free: Format.bytes(UInt64(max(0, s.diskFree))), percent: Int(s.diskFreeFraction * 100))
-        habitStore.log(.diskWarning, key: "disk", name: "Disk", detail: "\(Format.bytes(UInt64(max(0, s.diskFree)))) free", at: now)
-        refreshEvents()
     }
 
     private func refreshEvents() { events = habitStore.recentEvents }

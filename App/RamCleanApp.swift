@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct MenuBarLabel: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let used = Int((model.system?.memoryUsedFraction ?? 0) * 100)
@@ -45,5 +46,7 @@ struct MenuBarLabel: View {
             Image(systemName: model.system?.pressure == .normal || model.system == nil ? "memorychip" : "memorychip.fill")
             Text("\(used)%").monospacedDigit()
         }
+        // The menu bar item is always alive, so it lends the model a way to open the window.
+        .onAppear { model.openMainWindow = { openWindow(id: "main") } }
     }
 }

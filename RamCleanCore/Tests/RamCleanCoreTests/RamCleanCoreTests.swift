@@ -233,6 +233,27 @@ final class RecommendationTests: XCTestCase {
         try Data(repeating: 7, count: mb * 1_048_576).write(to: url)
     }
 
+    /// Sets a file's (and folder's) modified and opened dates to `days` ago.
+    func age(_ rel: String, days: Double) throws {
+        var url = home.appendingPathComponent(rel)
+        var rv = URLResourceValues()
+        rv.contentModificationDate = Date().addingTimeInterval(-days * 86_400)
+        rv.contentAccessDate = rv.contentModificationDate
+        try url.setResourceValues(rv)
+    }
+
+    func scanner() -> DiskScanner {
+        var sc = DiskScanner(home: home)
+        sc.minCacheBytes = 2 * 1_048_576
+        sc.largeFileBytes = 3 * 1_048_576
+        sc.minArtifactBytes = 2 * 1_048_576
+        sc.oldDownloadBytes = 2 * 1_048_576
+        sc.minAppBytes = 1
+        sc.appFolders = [home.appendingPathComponent("Apps")]
+        sc.appLastUsed = { _ in nil }
+        return sc
+    }
+
     func testDiskScanFindsCachesLargeFilesAndTrash() throws {
         try write("Library/Developer/Xcode/DerivedData/App-abc/Build/big.o", mb: 6)
         try write("Library/Developer/Xcode/Archives/2026/App.xcarchive/x", mb: 3)
@@ -240,15 +261,13 @@ final class RecommendationTests: XCTestCase {
         try write("Library/Caches/com.spotify.client/Data/blob", mb: 4)
         try write("Library/Caches/tiny/blob", mb: 1)
         try write(".cache/huggingface/model.bin", mb: 5)
-        try write("Downloads/Installer.dmg", mb: 4)
+        try write("Movies/trip.mov", mb: 5); try age("Movies/trip.mov", days: 200)
+        try write("Movies/editing-now.mov", mb: 5)          // opened today: active work
         try write("Documents/notes.txt", mb: 1)
-        try write("Library/Mail/huge.mbox", mb: 9)     // inside ~/Library: never a "large file"
+        try write("Library/Mail/huge.mbox", mb: 9)          // inside ~/Library: never a "large file"
         try write(".Trash/old.mov", mb: 2)
 
-        var scanner = DiskScanner(home: home)
-        scanner.minCacheBytes = 2 * 1_048_576
-        scanner.largeFileBytes = 3 * 1_048_576
-        let report = scanner.scan()
+        let report = scanner().scan()
         func item(_ name: String) -> DiskItem? { report.items.first { $0.name == name } }
 
         XCTAssertEqual(item("Xcode build data")?.kind, .cache)
@@ -258,8 +277,9 @@ final class RecommendationTests: XCTestCase {
         XCTAssertEqual(item("Spotify client cache")?.kind, .cache)
         XCTAssertNil(item("tiny"), "below the cache threshold")
         XCTAssertEqual(item("huggingface")?.kind, .cache)
-        XCTAssertEqual(item("Installer.dmg")?.kind, .largeFile)
-        XCTAssertTrue(item("Installer.dmg")!.reason.hasPrefix("Installer"))
+        XCTAssertEqual(item("trip.mov")?.kind, .largeFile)
+        XCTAssertEqual(item("trip.mov")?.suggestMove, true, "not opened in 200 days: move it off the Mac")
+        XCTAssertNil(item("editing-now.mov"), "recently opened files are active work")
         XCTAssertNil(item("notes.txt"))
         XCTAssertNil(item("huge.mbox"))
         XCTAssertNil(item("big.o"), "files inside a listed cache aren't repeated")
@@ -267,6 +287,53 @@ final class RecommendationTests: XCTestCase {
         XCTAssertEqual(item("Trash")?.canTrash, false)
         XCTAssertEqual(report.items.map { $0.bytes ?? 0 }, report.items.map { $0.bytes ?? 0 }.sorted(by: >))
         XCTAssertGreaterThan(report.reclaimableBytes, 18 * 1_048_576)
+    }
+
+    func testStaleProjectsAppsAndDownloadsButNeverActiveWork() throws {
+        // A project untouched for 60 days: its node_modules is fair game.
+        try write("Code/old-site/package.json", mb: 0)
+        try write("Code/old-site/node_modules/react/index.js", mb: 3)
+        for f in ["Code/old-site/package.json", "Code/old-site/node_modules/react/index.js", "Code/old-site/node_modules/react",
+                  "Code/old-site/node_modules"] { try age(f, days: 60) }
+        // A project you're working on (fresh files): never suggested.
+        try write("Code/live-app/Cargo.toml", mb: 0)
+        try write("Code/live-app/target/debug/app", mb: 3)
+        try age("Code/live-app/target/debug/app", days: 60); try age("Code/live-app/target", days: 60)
+        // An old project whose build folder was just written to (a build running now): skipped.
+        try write("Code/building/Package.swift", mb: 0); try age("Code/building/Package.swift", days: 90)
+        try write("Code/building/.build/out.o", mb: 3)
+
+        // Downloads: one old, one recent.
+        try write("Downloads/Old Installer.dmg", mb: 4); try age("Downloads/Old Installer.dmg", days: 120)
+        try write("Downloads/this-week.zip", mb: 4)
+
+        // Apps: unused for 200 days, an Apple app, a protected one, a running one, one with no record.
+        func app(_ name: String, _ id: String) throws {
+            try write("Apps/\(name).app/Contents/MacOS/\(name)", mb: 1)
+            let plist = ["CFBundleIdentifier": id, "CFBundleName": name, "CFBundlePackageType": "APPL", "CFBundleExecutable": name]
+            try (plist as NSDictionary).write(to: home.appendingPathComponent("Apps/\(name).app/Contents/Info.plist"))
+        }
+        try app("OldGame", "com.example.oldgame")
+        try app("Keynote Clone", "com.apple.fake")
+        try app("Kept", "com.example.kept")
+        try app("Running", "com.example.running")
+        try app("Mystery", "com.example.mystery")
+
+        var sc = scanner()
+        sc.isKept = { $0 == "com.example.kept" }
+        sc.runningAppPaths = [home.appendingPathComponent("Apps/Running.app").path]
+        sc.appLastUsed = { $0.lastPathComponent == "Mystery.app" ? nil : Date().addingTimeInterval(-200 * 86_400) }
+        let report = sc.scan()
+        func item(_ name: String) -> DiskItem? { report.items.first { $0.name == name } }
+
+        XCTAssertEqual(item("old-site › node_modules")?.kind, .buildArtifact)
+        XCTAssertTrue(item("old-site › node_modules")!.reason.contains("npm install"))
+        XCTAssertNil(item("live-app › target"), "active project")
+        XCTAssertNil(item("building › .build"), "build folder written today")
+        XCTAssertEqual(item("Old Installer.dmg")?.kind, .oldDownload)
+        XCTAssertNil(item("this-week.zip"))
+        XCTAssertEqual(report.items(.unusedApp).map(\.name), ["OldGame"])
+        XCTAssertNotNil(item("OldGame")?.caution)
     }
 
     func testPrettyNamesAndDurations() {
@@ -290,5 +357,81 @@ final class RecommendationTests: XCTestCase {
         XCTAssertEqual(p.reasons.first, "Playing audio")
         var r = a; r.verdict = .protected(.recentlyUsed(minutes: 16))
         XCTAssertEqual(r.reasons, ["Used 16 min ago", "Rarely used (1 of 14 days)", "12% CPU", "You quit it 2× before"])
+    }
+}
+
+final class AlertTests: XCTestCase {
+    func snap(mem: Double = 0.5, cpu: Double = 10, diskUsed: Double = 0.5, pressure: MemoryPressure = .normal) -> SystemSnapshot {
+        SystemSnapshot(totalMemory: 32 << 30, usedMemory: UInt64(mem * Double(32 << 30)), pressure: pressure, cpuPercent: cpu,
+                       diskTotal: 1_000_000_000_000, diskFree: Int64((1 - diskUsed) * 1_000_000_000_000))
+    }
+
+    func testThresholdsSustainRepeatRecoverAndSnooze() {
+        var m = ThresholdMonitor(prefs: Preferences())
+        let t0 = Date()
+        XCTAssertEqual(m.update(snap(mem: 0.9), now: t0), [.memory])
+        XCTAssertEqual(m.update(snap(mem: 0.9), now: t0.addingTimeInterval(600)), [], "no repeat within an hour")
+        XCTAssertEqual(m.update(snap(mem: 0.9), now: t0.addingTimeInterval(3700)), [.memory], "repeats hourly while over")
+        _ = m.update(snap(mem: 0.5), now: t0.addingTimeInterval(3800)) // recovered
+        XCTAssertEqual(m.update(snap(mem: 0.9), now: t0.addingTimeInterval(3900)), [.memory], "re-armed after recovery")
+
+        // CPU must stay over 97% for 2 minutes.
+        XCTAssertEqual(m.update(snap(cpu: 99), now: t0), [])
+        XCTAssertEqual(m.update(snap(cpu: 99), now: t0.addingTimeInterval(60)), [])
+        XCTAssertEqual(m.update(snap(cpu: 99), now: t0.addingTimeInterval(125)), [.cpu])
+        _ = m.update(snap(cpu: 50), now: t0.addingTimeInterval(130))
+        XCTAssertEqual(m.update(snap(cpu: 99), now: t0.addingTimeInterval(135)), [], "spike after a dip starts the clock again")
+
+        // Disk at 99%+ used; snoozing silences it.
+        var d = ThresholdMonitor(prefs: Preferences())
+        d.snooze(.disk, until: t0.addingTimeInterval(3600))
+        XCTAssertEqual(d.update(snap(diskUsed: 0.995), now: t0), [])
+        XCTAssertEqual(d.update(snap(diskUsed: 0.995), now: t0.addingTimeInterval(3601)), [.disk])
+
+        var off = Preferences(); off.alertsEnabled = false
+        var o = ThresholdMonitor(prefs: off)
+        XCTAssertEqual(o.update(snap(mem: 0.99, cpu: 100, diskUsed: 1), now: t0), [])
+    }
+
+    func assessment(_ name: String, mb: Double, cpu: Double = 0, idle: Double = 300, verdict: Verdict = .deadweight) -> Assessment {
+        let g = AppGroup(id: name, kind: .app, name: name, bundleID: name, bundlePath: nil, mainPID: 1, pids: [1],
+                         memoryBytes: UInt64(mb * 1_048_576), cpuPercent: cpu, hostedCommands: [], hostedCPUPercent: 0)
+        let f = FeatureVector(bundleID: name, memoryMB: mb, cpuPercent: cpu, minutesSinceActive: idle, foregroundMinutesToday: 0,
+                              avgDailyMinutes14d: 0, daysUsed14d: 1, launches7d: 0, hourOfDay: 12, isWeekend: 0,
+                              playingAudio: 0, timesKept: 0, timesQuit: 0)
+        return Assessment(group: g, features: f, score: 0.9, usedModel: false, verdict: verdict, cpuAverage: cpu)
+    }
+
+    func testRecommendationsInAlerts() {
+        let list = [assessment("Claude", mb: 4000, cpu: 60, verdict: .protected(.frontmost)),
+                    assessment("Spotify", mb: 400), assessment("Acrobat", mb: 480, verdict: .keep),
+                    assessment("Game", mb: 300, cpu: 80, verdict: .keep)]
+        let m = AlertRecommender.memory(snap(mem: 0.88), list)
+        XCTAssertEqual(m.title, "Memory is 88% full")
+        XCTAssertTrue(m.body.contains("Quit Spotify"), m.body)          // deadweight first, even if smaller
+        XCTAssertFalse(m.body.contains("Claude ("), "protected apps aren't recommended")
+        XCTAssertEqual(m.action, AlertAction(kind: .quit, target: "Spotify", label: "Quit Spotify"))
+
+        let c = AlertRecommender.cpu(snap(cpu: 99), list)
+        XCTAssertEqual(c.action?.label, "Quit Game")
+
+        let busyOnly = AlertRecommender.cpu(snap(cpu: 99), [list[0]])
+        XCTAssertNil(busyOnly.action)
+        XCTAssertTrue(busyOnly.body.contains("Busiest: Claude"), busyOnly.body)
+
+        let report = DiskReport(items: [
+            DiskItem(name: "uv", path: "/c/uv", bytes: 5 << 30, kind: .cache, reason: ""),
+            DiskItem(name: "old-site › node_modules", path: "/p/nm", bytes: 2 << 30, kind: .buildArtifact, reason: ""),
+            DiskItem(name: "OldGame", path: "/A/OldGame.app", bytes: 1 << 30, kind: .unusedApp, reason: ""),
+            DiskItem(name: "trip.mov", path: "/m/trip.mov", bytes: 12 << 30, kind: .largeFile, reason: "", suggestMove: true),
+        ], scannedAt: Date())
+        let d = AlertRecommender.disk(snap(diskUsed: 0.995), report)
+        XCTAssertEqual(d.title, "Disk is 100% full")
+        XCTAssertTrue(d.body.contains("Clear uv"), d.body)
+        XCTAssertTrue(d.body.contains("old-site › node_modules"), d.body)
+        XCTAssertTrue(d.body.contains("uninstall OldGame"), d.body)
+        XCTAssertTrue(d.body.contains("move trip.mov"), d.body)
+        XCTAssertEqual(d.action, AlertAction(kind: .trash, target: "/c/uv", label: "Trash uv"))
+        XCTAssertNil(AlertRecommender.disk(snap(diskUsed: 0.995), nil).action)
     }
 }

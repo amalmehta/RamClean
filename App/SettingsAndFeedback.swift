@@ -52,8 +52,27 @@ private struct ThresholdSettings: View {
                 slider("Ask about the same app at most every", $model.prefs.cooldownHours, 1...24, 1, " h")
                 slider("At most one suggestion every", $model.prefs.minMinutesBetweenNotifications, 1...60, 1, " min")
             }
-            Section("Disk") {
-                slider("Warn when free space below", $model.prefs.diskWarningPercent, 2...30, 1, "%")
+            Section("Alerts: notify with what to quit, clear or move") {
+                Toggle("Alert when memory, CPU or disk crosses its threshold", isOn: $model.prefs.alertsEnabled)
+                slider("Memory used at least", $model.prefs.memoryAlertPercent, 50...99, 1, "%")
+                slider("CPU at least", $model.prefs.cpuAlertPercent, 50...100, 1, "%")
+                LabeledContent("…for at least") {
+                    Stepper("\(Int(model.prefs.cpuAlertMinutes)) min", value: $model.prefs.cpuAlertMinutes, in: 1...15)
+                }
+                slider("Disk used at least", $model.prefs.diskAlertUsedPercent, 80...100, 1, "%")
+                Picker("While still over, remind every", selection: $model.prefs.alertRepeatMinutes) {
+                    ForEach([15.0, 30, 60, 120, 240], id: \.self) { Text($0 < 60 ? "\(Int($0)) min" : "\(Int($0 / 60)) h").tag($0) }
+                }
+            }
+            Section("What counts as unused") {
+                LabeledContent("Not opened for") {
+                    Stepper("\(Int(model.prefs.staleDays)) days", value: $model.prefs.staleDays, in: 30...365, step: 15)
+                }
+                LabeledContent("Active work if touched within") {
+                    Stepper("\(Int(model.prefs.activeDays)) days", value: $model.prefs.activeDays, in: 7...90, step: 7)
+                }
+                Text("Apps, downloads and big files you haven't opened in that long are suggested for removal or moving off the Mac. Projects and files changed recently, and build folders being written to, are never suggested.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

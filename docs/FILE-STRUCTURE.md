@@ -33,7 +33,8 @@ RamClean/
 │   │   ├── Protection.swift      Never-suggest rules
 │   │   ├── DeadweightModel.swift Create ML classifier, training answers, blending
 │   │   ├── Assessor.swift        Verdicts, notification policy, CPU averages
-│   │   └── DiskScanner.swift     Caches, large files and Trash to clear; reasons text; durations
+│   │   ├── DiskScanner.swift     What to clear or move: caches, stale project builds, unused apps, old downloads, large files, Trash
+│   │   └── Alerts.swift          Threshold alerts (memory, CPU, disk) and the recommendations they carry
 │   └── Tests/RamCleanCoreTests/
 │       └── RamCleanCoreTests.swift
 └── docs/

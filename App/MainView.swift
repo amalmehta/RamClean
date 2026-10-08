@@ -55,6 +55,8 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $showFeedback) { FeedbackView() }
+        // "Show recommendations" on an alert lands on the Overview with that bar's list open.
+        .onChange(of: model.requestedPanel) { _, p in if p != nil { section = .overview } }
     }
 }
 
@@ -95,6 +97,14 @@ struct OverviewView: View {
             }
             .padding(20)
         }
+        .onAppear(perform: takeRequestedPanel)
+        .onChange(of: model.requestedPanel) { _, _ in takeRequestedPanel() }
+    }
+
+    private func takeRequestedPanel() {
+        guard let p = model.requestedPanel else { return }
+        model.requestedPanel = nil
+        panel = p
     }
 
     @ViewBuilder private var gauges: some View {
@@ -107,7 +117,7 @@ struct OverviewView: View {
                 bar(.cpu, UsageBar(title: "CPU", value: s.cpuPercent / 100, detail: "All cores", tint: .blue, hint: "What's busy"))
                 bar(.disk, UsageBar(title: "Disk used", value: 1 - s.diskFreeFraction,
                          detail: "\(Format.bytes(UInt64(max(0, s.diskFree)))) free of \(Format.bytes(UInt64(max(0, s.diskTotal))))",
-                         tint: s.diskFreeFraction * 100 < model.prefs.diskWarningPercent ? .red : .purple, hint: "What to clear"))
+                         tint: (1 - s.diskFreeFraction) * 100 >= model.prefs.diskAlertUsedPercent - 5 ? .red : .purple, hint: "What to clear"))
             }
         } else {
             ProgressView().frame(maxWidth: .infinity)

@@ -23,8 +23,19 @@ public struct Preferences: Codable, Equatable, Sendable {
     public var busyCPUPercent: Double = 15
     public var protectBusyWorkTools = true
     public var includeMenuBarApps = false
-    /// Warn when free disk falls below this percent.
-    public var diskWarningPercent: Double = 10
+    /// Threshold alerts: notify when a resource crosses its line, with what to quit, clear or move.
+    public var alertsEnabled = true
+    public var memoryAlertPercent: Double = 85
+    public var cpuAlertPercent: Double = 97
+    /// CPU has to stay over its line this long before alerting.
+    public var cpuAlertMinutes: Double = 2
+    public var diskAlertUsedPercent: Double = 99
+    /// While a resource stays over its line, alert again at most this often.
+    public var alertRepeatMinutes: Double = 60
+    /// Not opened in this many days = no use anymore (apps, downloads, files to move off the Mac).
+    public var staleDays: Double = 90
+    /// Projects and files touched within this many days are active work and never suggested.
+    public var activeDays: Double = 30
     /// Seconds to wait after a polite quit before offering Force Quit.
     public var forceQuitAfterSeconds: Double = 8
     public var alwaysKeep: [String] = []
@@ -65,7 +76,14 @@ public struct Preferences: Codable, Equatable, Sendable {
         busyCPUPercent = v(.busyCPUPercent, busyCPUPercent)
         protectBusyWorkTools = v(.protectBusyWorkTools, protectBusyWorkTools)
         includeMenuBarApps = v(.includeMenuBarApps, includeMenuBarApps)
-        diskWarningPercent = v(.diskWarningPercent, diskWarningPercent)
+        alertsEnabled = v(.alertsEnabled, alertsEnabled)
+        memoryAlertPercent = v(.memoryAlertPercent, memoryAlertPercent)
+        cpuAlertPercent = v(.cpuAlertPercent, cpuAlertPercent)
+        cpuAlertMinutes = v(.cpuAlertMinutes, cpuAlertMinutes)
+        diskAlertUsedPercent = v(.diskAlertUsedPercent, diskAlertUsedPercent)
+        alertRepeatMinutes = v(.alertRepeatMinutes, alertRepeatMinutes)
+        staleDays = v(.staleDays, staleDays)
+        activeDays = v(.activeDays, activeDays)
         forceQuitAfterSeconds = v(.forceQuitAfterSeconds, forceQuitAfterSeconds)
         alwaysKeep = v(.alwaysKeep, alwaysKeep)
         workTools = v(.workTools, workTools)

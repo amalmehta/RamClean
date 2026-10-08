@@ -1,4 +1,4 @@
-# RamClean
+# <img src="docs/images/icon.png" width="64" align="center" alt=""> RamClean
 
 A Mac menu bar app that spots apps eating memory you aren't using, asks before quitting them, and learns your habits so it stops asking about the ones you need.
 

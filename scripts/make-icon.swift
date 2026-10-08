@@ -22,79 +22,147 @@ func sparkle(_ c: CGPoint, _ r: CGFloat) -> NSBezierPath {
     return p
 }
 
+func oval(_ c: CGPoint, _ w: CGFloat, _ h: CGFloat) -> NSBezierPath {
+    NSBezierPath(ovalIn: NSRect(x: c.x - w / 2, y: c.y - h / 2, width: w, height: h))
+}
+
+func withShadow(_ alpha: CGFloat, blur: CGFloat = 22, dy: CGFloat = -12, tint: UInt32 = 0x000000, _ draw: () -> Void) {
+    NSGraphicsContext.saveGraphicsState()
+    let s = NSShadow()
+    s.shadowColor = color(tint, alpha)
+    s.shadowOffset = NSSize(width: 0, height: dy)
+    s.shadowBlurRadius = blur
+    s.set()
+    draw()
+    NSGraphicsContext.restoreGraphicsState()
+}
+
+/// A curled ram's horn: a tapered spiral filled in one piece, with ridges and a highlight.
+func horn(center c: CGPoint, start: CGFloat, dir: CGFloat) {
+    let turns: CGFloat = 1.3, steps = 220
+    var pts: [CGPoint] = [], widths: [CGFloat] = []
+    for i in 0...steps {
+        let k = CGFloat(i) / CGFloat(steps)
+        let t = k * turns * 2 * .pi
+        let r = 140 * (1 - k * 0.8)
+        let a = start + dir * t
+        pts.append(CGPoint(x: c.x + r * cos(a), y: c.y + r * sin(a)))
+        widths.append(86 - 56 * k)
+    }
+    var outer: [CGPoint] = [], inner: [CGPoint] = []
+    for i in pts.indices {
+        let a = pts[max(0, i - 1)], b = pts[min(pts.count - 1, i + 1)]
+        let len = max(0.001, hypot(b.x - a.x, b.y - a.y))
+        let n = CGPoint(x: -(b.y - a.y) / len, y: (b.x - a.x) / len)
+        let h = widths[i] / 2
+        outer.append(CGPoint(x: pts[i].x + n.x * h, y: pts[i].y + n.y * h))
+        inner.append(CGPoint(x: pts[i].x - n.x * h, y: pts[i].y - n.y * h))
+    }
+    let shape = NSBezierPath()
+    shape.move(to: outer[0])
+    outer.dropFirst().forEach { shape.line(to: $0) }
+    inner.reversed().forEach { shape.line(to: $0) }
+    shape.close()
+    shape.append(oval(pts.last!, widths.last!, widths.last!)) // rounded tip
+
+    withShadow(0.28, blur: 20, dy: -10) { color(0xE7B65A).setFill(); shape.fill() }
+    NSGraphicsContext.saveGraphicsState()
+    shape.addClip()
+    NSGradient(colors: [color(0xFFE29A), color(0xF2BC5C), color(0xC98632)], atLocations: [0, 0.5, 1], colorSpace: .sRGB)!
+        .draw(in: shape.bounds.insetBy(dx: -20, dy: -20), angle: -70)
+    // Ridges across the horn.
+    color(0x9A6224, 0.32).setStroke()
+    for i in stride(from: 10, to: steps - 6, by: 11) {
+        let ridge = NSBezierPath()
+        ridge.move(to: inner[i]); ridge.line(to: outer[i])
+        ridge.lineWidth = 5; ridge.lineCapStyle = .round
+        ridge.stroke()
+    }
+    // Soft highlight running along the curl.
+    let shine = NSBezierPath()
+    for i in pts.indices {
+        let q = CGPoint(x: outer[i].x * 0.72 + pts[i].x * 0.28, y: outer[i].y * 0.72 + pts[i].y * 0.28)
+        i == 0 ? shine.move(to: q) : shine.line(to: q)
+    }
+    shine.lineWidth = 10; shine.lineCapStyle = .round; shine.lineJoinStyle = .round
+    color(0xFFFFFF, 0.35).setStroke()
+    shine.stroke()
+    NSGraphicsContext.restoreGraphicsState()
+}
+
 func drawIcon() {
     // Squircle body on the standard macOS 824 pt grid, with a soft drop shadow.
     let body = NSRect(x: 100, y: 100, width: 824, height: 824)
     let bodyPath = NSBezierPath(roundedRect: body, xRadius: 185, yRadius: 185)
-    NSGraphicsContext.saveGraphicsState()
-    let shadow = NSShadow()
-    shadow.shadowColor = color(0x000000, 0.35)
-    shadow.shadowOffset = NSSize(width: 0, height: -12)
-    shadow.shadowBlurRadius = 24
-    shadow.set()
-    color(0x2C5BE0).setFill()
-    bodyPath.fill()
-    NSGraphicsContext.restoreGraphicsState()
-
+    withShadow(0.35, blur: 24) { color(0x5B6CF6).setFill(); bodyPath.fill() }
     NSGraphicsContext.saveGraphicsState()
     bodyPath.addClip()
-    NSGradient(colors: [color(0x4F7DFF), color(0x2A55D8), color(0x10B3A3)], atLocations: [0, 0.5, 1],
+    NSGradient(colors: [color(0x8A5CFF), color(0x5B6CF6), color(0x22B8C8)], atLocations: [0, 0.5, 1],
                colorSpace: .sRGB)!.draw(in: body, angle: -60)
-    // Gentle glow from the top.
-    NSGradient(starting: color(0xFFFFFF, 0.22), ending: color(0xFFFFFF, 0))!
-        .draw(in: NSRect(x: 100, y: 560, width: 824, height: 364), angle: -90)
+    NSGradient(starting: color(0xFFFFFF, 0.2), ending: color(0xFFFFFF, 0))!
+        .draw(in: NSRect(x: 100, y: 600, width: 824, height: 324), angle: -90)
     NSGraphicsContext.restoreGraphicsState()
 
-    // Memory stick, tilted slightly so it feels lively.
-    NSGraphicsContext.saveGraphicsState()
-    let t = NSAffineTransform()
-    t.translateX(by: 500, yBy: 470)
-    t.rotate(byDegrees: -8)
-    t.concat()
+    // Horns curl down beside the face.
+    horn(center: CGPoint(x: 296, y: 556), start: 0.3, dir: 1)
+    horn(center: CGPoint(x: 728, y: 556), start: .pi - 0.3, dir: -1)
 
-    let stickShadow = NSShadow()
-    stickShadow.shadowColor = color(0x0A1E5C, 0.35)
-    stickShadow.shadowOffset = NSSize(width: 0, height: -14)
-    stickShadow.shadowBlurRadius = 26
-    NSGraphicsContext.saveGraphicsState()
-    stickShadow.set()
-    let stick = NSRect(x: -300, y: -130, width: 600, height: 260)
-    // The stick, with its key notch cut out of the bottom edge (clip away the notch).
-    let mask = NSBezierPath(rect: NSRect(x: -1000, y: -1000, width: 2000, height: 2000))
-    mask.append(NSBezierPath(roundedRect: NSRect(x: 60, y: -160, width: 30, height: 70), xRadius: 13, yRadius: 13))
-    mask.windingRule = .evenOdd
-    mask.addClip()
-    color(0xF7FAFF).setFill()
-    NSBezierPath(roundedRect: stick, xRadius: 30, yRadius: 30).fill()
-    NSGraphicsContext.restoreGraphicsState()
-
-    // Gold contacts along the bottom.
-    let gold = NSGradient(starting: color(0xFFD66B), ending: color(0xE8A93A))!
-    var x: CGFloat = -268
-    while x < 270 {
-        if !(x > 40 && x < 100) {
-            gold.draw(in: NSBezierPath(roundedRect: NSRect(x: x, y: -112, width: 22, height: 54), xRadius: 6, yRadius: 6), angle: -90)
-        }
-        x += 36
+    // Ears, tucked under the wool.
+    for (x, angle) in [(CGFloat(350), CGFloat(22)), (CGFloat(674), CGFloat(-22))] {
+        NSGraphicsContext.saveGraphicsState()
+        let t = NSAffineTransform()
+        t.translateX(by: x, yBy: 516); t.rotate(byDegrees: angle); t.concat()
+        withShadow(0.25, blur: 10, dy: -5) { color(0x3A3A50).setFill(); oval(.zero, 156, 68).fill() }
+        color(0xF3A7B8).setFill()
+        oval(CGPoint(x: x < 512 ? -12 : 12, y: 0), 100, 30).fill()
+        NSGraphicsContext.restoreGraphicsState()
     }
 
-    // Four chips.
-    for i in 0..<4 {
-        let cx = -258 + CGFloat(i) * 132
-        let chip = NSRect(x: cx, y: -28, width: 110, height: 124)
-        NSGradient(starting: color(0x26345F), ending: color(0x141C38))!
-            .draw(in: NSBezierPath(roundedRect: chip, xRadius: 14, yRadius: 14), angle: -90)
-        color(0xFFFFFF, 0.12).setFill()
-        NSBezierPath(roundedRect: NSRect(x: cx + 14, y: 70, width: 82, height: 10), xRadius: 5, yRadius: 5).fill()
+    // Face.
+    let face = oval(CGPoint(x: 512, y: 448), 304, 384)
+    withShadow(0.3, blur: 24, dy: -12) { color(0x3A3A50).setFill(); face.fill() }
+    NSGradient(starting: color(0x4C4C64), ending: color(0x2C2C3E))!.draw(in: face, angle: -90)
+
+    // Wool: a fluffy cap of overlapping puffs, with a soft shade underneath.
+    let puffs: [(CGFloat, CGFloat, CGFloat)] = [
+        (512, 716, 96), (432, 700, 80), (592, 700, 80), (372, 650, 66), (652, 650, 66),
+        (470, 770, 66), (554, 770, 66), (512, 622, 70), (448, 612, 56), (576, 612, 56),
+        (400, 600, 50), (624, 600, 50),
+    ]
+    withShadow(0.22, blur: 18, dy: -10, tint: 0x1B1B4A) {
+        color(0xDCDDF0).setFill()
+        for (x, y, r) in puffs { oval(CGPoint(x: x, y: y - 8), r * 2, r * 2).fill() }
     }
-    NSGraphicsContext.restoreGraphicsState()
+    color(0xFCFCFF).setFill()
+    for (x, y, r) in puffs { oval(CGPoint(x: x, y: y + 4), r * 2 - 10, r * 2 - 10).fill() }
+    color(0xFFFFFF, 0.9).setFill()
+    for (x, y, r) in puffs where y > 690 { oval(CGPoint(x: x - r * 0.25, y: y + r * 0.3), r * 0.7, r * 0.45).fill() }
+
+    // Happy closed eyes, rosy cheeks, muzzle and smile.
+    for x in [CGFloat(448), 576] {
+        let eye = NSBezierPath()
+        eye.appendArc(withCenter: CGPoint(x: x, y: 474), radius: 30, startAngle: 20, endAngle: 160)
+        eye.lineWidth = 15; eye.lineCapStyle = .round
+        color(0xFFFFFF).setStroke(); eye.stroke()
+    }
+    color(0xF29DB0, 0.6).setFill()
+    oval(CGPoint(x: 404, y: 414), 58, 32).fill(); oval(CGPoint(x: 620, y: 414), 58, 32).fill()
+    NSGradient(starting: color(0x6A6A86), ending: color(0x55556E))!.draw(in: oval(CGPoint(x: 512, y: 342), 196, 124), angle: -90)
+    color(0x262636).setFill()
+    oval(CGPoint(x: 481, y: 358), 26, 18).fill(); oval(CGPoint(x: 543, y: 358), 26, 18).fill()
+    let smile = NSBezierPath()
+    smile.appendArc(withCenter: CGPoint(x: 512, y: 336), radius: 34, startAngle: 210, endAngle: 330)
+    smile.lineWidth = 9; smile.lineCapStyle = .round
+    color(0x262636).setStroke(); smile.stroke()
 
     // Sparkles: "clean".
-    color(0xFFFFFF).setFill()
-    sparkle(CGPoint(x: 748, y: 742), 118).fill()
-    color(0xFFFFFF, 0.9).setFill()
-    sparkle(CGPoint(x: 640, y: 812), 46).fill()
-    sparkle(CGPoint(x: 838, y: 618), 34).fill()
+    withShadow(0.15, blur: 10, dy: -4) {
+        color(0xFFFFFF).setFill()
+        sparkle(CGPoint(x: 800, y: 806), 74).fill()
+        color(0xFFFFFF, 0.9).setFill()
+        sparkle(CGPoint(x: 706, y: 860), 30).fill()
+        sparkle(CGPoint(x: 210, y: 300), 44).fill()
+    }
 }
 
 func png(_ px: Int) -> Data {

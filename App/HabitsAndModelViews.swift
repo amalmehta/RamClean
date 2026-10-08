@@ -72,6 +72,7 @@ struct ActivityView: View {
         case .forceQuit: return "Force quit"
         case .regretRelaunch: return "You reopened"
         case .diskWarning: return "Low space:"
+        case .movedToTrash: return "Moved to Trash:"
         }
     }
     private func symbol(_ k: HabitEventKind) -> String {
@@ -84,6 +85,7 @@ struct ActivityView: View {
         case .regretRelaunch: return "arrow.uturn.backward"
         case .activated: return "macwindow"
         case .diskWarning: return "internaldrive"
+        case .movedToTrash: return "trash"
         }
     }
     private func color(_ k: HabitEventKind) -> Color {

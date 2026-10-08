@@ -54,7 +54,8 @@ OPEN QUESTIONS / ASSUMPTIONS:
 
 Asked and answered (2026-10-07):
 - Ending a process: quit politely first, then offer Force Quit if it's still running.
-- Scope: RAM + CPU per process; disk is a gauge and a low-space warning only, nothing is deleted.
+- Scope: RAM + CPU per process; disk is a gauge and a low-space warning.
+- (2026-10-08) Clicking a bar gives recommendations. Memory and CPU: a ranked quit list with reasons. Disk: rebuildable caches, large files in home, and the Trash, with Move to Trash (confirmed, recoverable) and Show in Finder. Nothing is ever deleted permanently.
 - Model: Apple Create ML classifier (boosted trees), trained on this Mac.
 - GitHub: local git only for now; no repo created or pushed.
 
@@ -98,5 +99,6 @@ CHANGELOG:
 - 2026-10-02 — added a DELIVERABLES field after CONTEXT
 - 2026-10-02 — added meta-instruction: every project has a system design doc at docs/SYSTEM-DESIGN.md
 - 2026-10-05 — added meta-instruction: applications include a settings button or tab
+- 2026-10-08 — the Memory, CPU and Disk bars open recommendations: what to quit (with reasons) and what to clear (caches, large files, Trash) with Move to Trash
 - 2026-10-08 — added an app icon (RAM stick with sparkles), drawn by scripts/make-icon.swift
 - 2026-10-07 — built the Mac app: process sampling, habit log, protections, Create ML model, notifications, settings, feedback, docs, tests

@@ -7,6 +7,8 @@ struct UsageBar: View {
     var value: Double // 0…1
     var detail: String
     var tint: Color
+    /// Shown under the bar when it opens recommendations on click.
+    var hint: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -23,6 +25,10 @@ struct UsageBar: View {
             }
             .frame(height: 8)
             Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            if let hint {
+                Label(hint, systemImage: "chevron.right.circle").font(.caption.weight(.medium)).foregroundStyle(tint)
+                    .labelStyle(TrailingIconLabel())
+            }
         }
         .padding(14)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
@@ -71,6 +77,12 @@ struct VerdictBadge: View {
     private var help: String {
         let source = assessment.usedModel ? "rules of thumb blended with your trained model" : "rules of thumb (model not trained yet)"
         return "Deadweight score \(Int(assessment.score * 100))% from \(source)."
+    }
+}
+
+struct TrailingIconLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) { configuration.title; configuration.icon }
     }
 }
 

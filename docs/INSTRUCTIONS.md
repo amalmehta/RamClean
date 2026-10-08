@@ -28,11 +28,22 @@ The first time it runs, macOS asks whether RamClean may send notifications. Clic
 cd RamCleanCore && swift test
 ```
 
-The 16 tests cover process grouping (helpers, and Claude Code inside Terminal), every protection rule, the habit log, the rule-of-thumb score, Create ML training (including apps it has never seen and the "regret" relabel), the notification policy (thresholds and cooldowns), loading preferences, and a live smoke test of the samplers on this Mac.
+The 19 tests cover process grouping (helpers, and Claude Code inside Terminal), every protection rule, the habit log, the rule-of-thumb score, Create ML training (including apps it has never seen and the "regret" relabel), the notification policy (thresholds and cooldowns), loading preferences, the disk scanner (on a fake home folder), the "why" text for each app, and a live smoke test of the samplers on this Mac.
 
 ## Using it
 
 **Menu bar.** The chip icon shows how much memory is in use. Click it to see memory, the apps that look like deadweight (or the biggest apps when nothing does), a **Quit** button for each, and links to the window and Settings.
+
+**Click a bar for recommendations.** The three bars at the top of the Overview are buttons:
+
+- **Memory → What to quit:** your Dock apps ranked by memory. Each shows RamClean's call (Quit, Keep or Protected), the reasons ("Idle 3 h · Rarely used (1 of 14 days) · You quit it 2× before"), and Quit / Keep buttons. The header names the apps it recommends quitting and how much memory that frees.
+- **CPU → What's busy:** the same list ranked by CPU.
+- **Disk → What to clear:** a read-only scan, with results appearing as each part finishes:
+  - **Rebuildable caches:** app caches in `~/Library/Caches` and `~/.cache`, Xcode build data, archives and device support, simulator caches, and npm, Gradle and Cargo caches.
+  - **Large files:** files of 1 GB or more anywhere in your home folder except `~/Library`, with a hint (installer, archive, video…) and when each was last opened.
+  - **Trash:** how much space it holds.
+
+  Each item has **Move to Trash**, which asks you first, and **Show in Finder**. Moved items can be put back from the Trash until you empty it; RamClean never empties the Trash or deletes anything permanently. Items to double-check (like Xcode archives) carry an orange note. Simulator devices and the Trash are advice only. The first scan may make macOS ask for access to Desktop, Documents and Downloads; RamClean only reads sizes there.
 
 **Overview window.** Shows memory, CPU and disk use, and every Dock app with its memory, its CPU (averaged over the last few checks) and RamClean's verdict:
 
@@ -46,7 +57,7 @@ Rows stay in place while the pointer is over the list, and re-sort by memory at 
 
 Menu bar apps, command-line tools and background processes are listed in a collapsed section. They're shown, but never suggested.
 
-**Notifications.** A notification is sent when memory is at least 80% used (or memory pressure is elevated) and an app of 400 MB or more scores at least 70%. An app idling at 60%+ CPU also triggers one. Buttons: **Quit**, **Keep running**, **Always keep**. RamClean sends at most one notification every 10 minutes and asks about the same app at most every 4 hours. If free disk space drops below 10%, you get one warning a day. RamClean never deletes files.
+**Notifications.** A notification is sent when memory is at least 80% used (or memory pressure is elevated) and an app of 400 MB or more scores at least 70%. An app idling at 60%+ CPU also triggers one. Buttons: **Quit**, **Keep running**, **Always keep**. RamClean sends at most one notification every 10 minutes and asks about the same app at most every 4 hours. If free disk space drops below 10%, you get one warning a day; click the Disk bar to see what you could clear.
 
 **Habits.** Shows how long each app is in front while you're at the Mac (time only counts when there's been input in the last 2 minutes), averaged over 14 days, plus your Kept / Quit / Reopened counts.
 

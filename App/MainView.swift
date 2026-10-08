@@ -62,6 +62,7 @@ struct OverviewView: View {
     @EnvironmentObject var model: AppModel
     @State private var showOthers = false
     @State private var order = StableOrder.overview
+    @State private var panel: UsagePanel?
 
     var body: some View {
         let apps = order.arrange(model.assessments.filter { $0.group.kind == .app })
@@ -98,18 +99,32 @@ struct OverviewView: View {
 
     @ViewBuilder private var gauges: some View {
         if let s = model.system {
+            // Each bar opens recommendations: what to quit (memory, CPU) or what to clear (disk).
             HStack(spacing: 12) {
-                UsageBar(title: "Memory", value: s.memoryUsedFraction,
+                bar(.memory, UsageBar(title: "Memory", value: s.memoryUsedFraction,
                          detail: "\(Format.bytes(s.usedMemory)) of \(Format.bytes(s.totalMemory)) · pressure \(s.pressure.label) · swap \(Format.bytes(s.swapUsed))",
-                         tint: memoryTint(s))
-                UsageBar(title: "CPU", value: s.cpuPercent / 100, detail: "All cores", tint: .blue)
-                UsageBar(title: "Disk used", value: 1 - s.diskFreeFraction,
+                         tint: memoryTint(s), hint: "What to quit"))
+                bar(.cpu, UsageBar(title: "CPU", value: s.cpuPercent / 100, detail: "All cores", tint: .blue, hint: "What's busy"))
+                bar(.disk, UsageBar(title: "Disk used", value: 1 - s.diskFreeFraction,
                          detail: "\(Format.bytes(UInt64(max(0, s.diskFree)))) free of \(Format.bytes(UInt64(max(0, s.diskTotal))))",
-                         tint: s.diskFreeFraction * 100 < model.prefs.diskWarningPercent ? .red : .purple)
+                         tint: s.diskFreeFraction * 100 < model.prefs.diskWarningPercent ? .red : .purple, hint: "What to clear"))
             }
         } else {
             ProgressView().frame(maxWidth: .infinity)
         }
+    }
+
+    private func bar(_ p: UsagePanel, _ content: UsageBar) -> some View {
+        Button { panel = p } label: { content.contentShape(Rectangle()) }
+            .buttonStyle(.plain)
+            .help(p == .disk ? "Show caches and large files you could clear" : "Show recommendations")
+            .accessibilityLabel("\(content.title) recommendations")
+            .popover(isPresented: Binding(get: { panel == p }, set: { if !$0 { panel = nil } }), arrowEdge: .bottom) {
+                Group {
+                    if p == .disk { DiskRecommendations() } else { AppRecommendations(panel: p) }
+                }
+                .environmentObject(model)
+            }
     }
 
     private func summary(_ apps: [Assessment]) -> some View {

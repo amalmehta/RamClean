@@ -16,6 +16,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var habits: [AppHabit] = []
     @Published private(set) var awaitingForceQuit: Set<String> = []
     @Published private(set) var isTraining = false
+    @Published private(set) var diskReport: DiskReport?
+    @Published private(set) var diskScanStep: String?
     @Published var prefs: Preferences {
         didSet {
             guard prefs != oldValue else { return }
@@ -242,6 +244,44 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: - Disk
+
+    /// Scans in the background; the UI shows `diskScanStep` until it's done.
+    func scanDisk() {
+        guard diskScanStep == nil else { return }
+        diskScanStep = "starting"
+        DispatchQueue.global(qos: .utility).async {
+            let report = DiskScanner().scan(progress: { step, found in
+                let partial = DiskReport(items: found.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }, scannedAt: Date())
+                DispatchQueue.main.async {
+                    self.diskScanStep = step
+                    if !found.isEmpty { self.diskReport = partial }
+                }
+            })
+            DispatchQueue.main.async {
+                self.diskReport = report
+                self.diskScanStep = nil
+            }
+        }
+    }
+
+    /// Moves an item to the Trash (recoverable until you empty it). Returns an error message on failure.
+    func moveToTrash(_ item: DiskItem) -> String? {
+        guard item.canTrash else { return "RamClean doesn't remove this one itself." }
+        do {
+            try FileManager.default.trashItem(at: URL(fileURLWithPath: item.path), resultingItemURL: nil)
+        } catch {
+            return error.localizedDescription
+        }
+        habitStore.log(.movedToTrash, key: "disk", name: item.name,
+                       detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) · \(item.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))",
+                       at: Date())
+        diskReport?.items.removeAll { $0.id == item.id }
+        refreshEvents()
+        tick()
+        return nil
+    }
+
     func resetModel() {
         model.reset()
         modelStatus = model.status
@@ -289,11 +329,5 @@ enum Format {
     static func bytes(_ b: UInt64) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(b), countStyle: .memory)
     }
-    static func duration(minutes m: Double) -> String {
-        if m >= 20_000 { return "over 2 weeks" }
-        if m < 1 { return "under a minute" }
-        if m < 60 { return "\(Int(m)) min" }
-        if m < 60 * 48 { return String(format: "%.1f h", m / 60).replacingOccurrences(of: ".0 h", with: " h") }
-        return "\(Int(m / 1440)) days"
-    }
+    static func duration(minutes m: Double) -> String { HumanFormat.duration(minutes: m) }
 }

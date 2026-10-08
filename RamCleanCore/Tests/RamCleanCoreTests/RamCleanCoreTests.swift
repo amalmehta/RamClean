@@ -221,3 +221,74 @@ final class LiveSamplerTests: XCTestCase {
         _ = AudioActivity.pidsPlayingAudio() // must not crash
     }
 }
+
+final class RecommendationTests: XCTestCase {
+    var home: URL!
+    override func setUp() { home = FileManager.default.temporaryDirectory.appendingPathComponent("home-\(UUID().uuidString)") }
+    override func tearDown() { try? FileManager.default.removeItem(at: home) }
+
+    func write(_ rel: String, mb: Int) throws {
+        let url = home.appendingPathComponent(rel)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 7, count: mb * 1_048_576).write(to: url)
+    }
+
+    func testDiskScanFindsCachesLargeFilesAndTrash() throws {
+        try write("Library/Developer/Xcode/DerivedData/App-abc/Build/big.o", mb: 6)
+        try write("Library/Developer/Xcode/Archives/2026/App.xcarchive/x", mb: 3)
+        try write("Library/Developer/CoreSimulator/Devices/ABC/data", mb: 3)
+        try write("Library/Caches/com.spotify.client/Data/blob", mb: 4)
+        try write("Library/Caches/tiny/blob", mb: 1)
+        try write(".cache/huggingface/model.bin", mb: 5)
+        try write("Downloads/Installer.dmg", mb: 4)
+        try write("Documents/notes.txt", mb: 1)
+        try write("Library/Mail/huge.mbox", mb: 9)     // inside ~/Library: never a "large file"
+        try write(".Trash/old.mov", mb: 2)
+
+        var scanner = DiskScanner(home: home)
+        scanner.minCacheBytes = 2 * 1_048_576
+        scanner.largeFileBytes = 3 * 1_048_576
+        let report = scanner.scan()
+        func item(_ name: String) -> DiskItem? { report.items.first { $0.name == name } }
+
+        XCTAssertEqual(item("Xcode build data")?.kind, .cache)
+        XCTAssertTrue(item("Xcode build data")!.canTrash)
+        XCTAssertNotNil(item("Xcode archives")?.caution)
+        XCTAssertEqual(item("Simulator devices")?.canTrash, false)
+        XCTAssertEqual(item("Spotify client cache")?.kind, .cache)
+        XCTAssertNil(item("tiny"), "below the cache threshold")
+        XCTAssertEqual(item("huggingface")?.kind, .cache)
+        XCTAssertEqual(item("Installer.dmg")?.kind, .largeFile)
+        XCTAssertTrue(item("Installer.dmg")!.reason.hasPrefix("Installer"))
+        XCTAssertNil(item("notes.txt"))
+        XCTAssertNil(item("huge.mbox"))
+        XCTAssertNil(item("big.o"), "files inside a listed cache aren't repeated")
+        XCTAssertEqual(item("Trash")?.kind, .trash)
+        XCTAssertEqual(item("Trash")?.canTrash, false)
+        XCTAssertEqual(report.items.map { $0.bytes ?? 0 }, report.items.map { $0.bytes ?? 0 }.sorted(by: >))
+        XCTAssertGreaterThan(report.reclaimableBytes, 18 * 1_048_576)
+    }
+
+    func testPrettyNamesAndDurations() {
+        XCTAssertEqual(DiskScanner.prettyCacheName("com.spotify.client"), "Spotify client cache")
+        XCTAssertEqual(DiskScanner.prettyCacheName("Homebrew"), "Homebrew")
+        XCTAssertEqual(HumanFormat.duration(minutes: 0.5), "under a minute")
+        XCTAssertEqual(HumanFormat.duration(minutes: 90), "1.5 h")
+        XCTAssertEqual(HumanFormat.duration(minutes: 1440 * 5), "5 days")
+        XCTAssertEqual(HumanFormat.duration(minutes: 1440 * 120), "4 months")
+    }
+
+    func testAppReasons() {
+        let g = AppGroup(id: "s", kind: .app, name: "Spotify", bundleID: "s", bundlePath: nil, mainPID: 1, pids: [1],
+                         memoryBytes: 1 << 30, cpuPercent: 0, hostedCommands: [], hostedCPUPercent: 0)
+        let f = FeatureVector(bundleID: "s", memoryMB: 1024, cpuPercent: 12, minutesSinceActive: 180, foregroundMinutesToday: 0,
+                              avgDailyMinutes14d: 0.2, daysUsed14d: 1, launches7d: 0, hourOfDay: 12, isWeekend: 0,
+                              playingAudio: 0, timesKept: 0, timesQuit: 2)
+        let a = Assessment(group: g, features: f, score: 0.9, usedModel: false, verdict: .deadweight, cpuAverage: 12)
+        XCTAssertEqual(a.reasons, ["Idle 3 h", "Rarely used (1 of 14 days)", "12% CPU", "You quit it 2× before"])
+        var p = a; p.verdict = .protected(.playingAudio)
+        XCTAssertEqual(p.reasons.first, "Playing audio")
+        var r = a; r.verdict = .protected(.recentlyUsed(minutes: 16))
+        XCTAssertEqual(r.reasons, ["Used 16 min ago", "Rarely used (1 of 14 days)", "12% CPU", "You quit it 2× before"])
+    }
+}

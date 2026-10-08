@@ -21,6 +21,7 @@ flowchart TB
         FV["FeatureVector + HeuristicScorer"]
         DM["DeadweightModel<br/>Create ML boosted trees · training.jsonl"]
         AS["Assessor + SuggestionPolicy + CPUHistory"]
+        DS["DiskScanner<br/>caches · large files · Trash"]
     end
     AM --> PS & SS & AA
     PS --> GR --> AS
@@ -32,6 +33,8 @@ flowchart TB
     NT -- "Quit / Keep / Always keep / Force Quit" --> AM
     AM -- answers --> DM & HS
     UI <--> AM
+    AM -- "Disk bar clicked" --> DS
+    DS -- "items found so far" --> AM
     NSW["NSWorkspace<br/>activate · launch · terminate"] --> AM
 ```
 
@@ -51,6 +54,8 @@ flowchart TB
 | `Assessor` | For each group: features, protection, score, then a verdict of `protected(reason)`, `deadweight` or `keep`. |
 | `SuggestionPolicy` | Decides whether to notify now, and about which app (the largest memory × score that passes the thresholds and cooldowns). |
 | `CPUHistory` | Rolling average over the last 12 samples, so a single spike doesn't count as "busy". |
+| `DiskScanner` | Read-only scan for space you could free. It measures a fixed list of rebuildable developer and tool caches, every child of `~/Library/Caches` and `~/.cache` over 200 MB, files of 1 GB or more in your home folder (skipping `~/Library`, hidden folders, inside app bundles, and anything already listed), and the Trash. Each item gets a reason, an optional caution, and a "can trash" flag. It reports items as each step finishes. |
+| `Assessment.reasons` | Short "why" phrases for the recommendation lists: protection reason, idle time, daily use, CPU, and your past answers. |
 | `AppModel` | Runs the timer, credits foreground time, observes app launch, quit and activation, quits apps (`terminate`, then optionally `forceTerminate`), records answers, retrains the model in the background, and publishes state to SwiftUI. |
 | `Notifier` | Notification categories with action buttons; routes taps back to `AppModel`. |
 
@@ -70,6 +75,8 @@ flowchart TB
 - **Keep / Always keep:** records a `keep` example. "Always keep" also adds the app to the list.
 - **Regret:** if an app RamClean quit is opened again within 30 minutes, its latest example is relabelled `keep`.
 - After every answer the model retrains on a background queue; it takes about a second.
+
+**Recommendations (clicking a bar):** Memory and CPU show Dock apps ranked by that resource with their verdict, reasons, and Quit / Keep buttons; those buttons feed the model exactly like notification answers do. Disk runs `DiskScanner` on a background queue, and its results stream into the popover. **Move to Trash** asks first, then calls `FileManager.trashItem` (recoverable), logs a `movedToTrash` event and refreshes.
 
 **Scoring blend:** `score = w × model + (1 − w) × heuristic`, where `w = min(0.85, answers / 40)`.
 
@@ -92,11 +99,13 @@ The model trains only once there are at least 8 answers, with at least 3 quits a
 - **Idle time for apps never seen in front counts from when RamClean started watching**, not "forever". Otherwise a fresh install would flag every app as deadweight.
 - **Stable row order.** Rows re-sort at most once a minute and never under the pointer. Found in testing: re-sorting between aiming and clicking made a click hit a neighbouring app.
 - **Regular app with a Dock icon, plus a menu bar item.** This makes ⌘, and the main window behave normally. A menu-bar-only (`LSUIElement`) build would be a small change.
+- **Disk: Move to Trash only.** Nothing is deleted permanently, and every move is confirmed and logged. Only rebuildable caches are labelled safe; large files are listed with what they look like, and you decide. Simulator devices are advice only, because trashing their folder behind `simctl`'s back corrupts Xcode's device list.
+- **Disk scan on demand.** The scan reads a lot of files, so it runs only when you open the Disk popover or press Rescan, never on the timer.
 - **Ad-hoc signed, no sandbox.** Reading other apps' processes isn't possible from the App Sandbox. Distribution would need Developer ID signing and notarization.
 
 ## Testing
 
-- `RamCleanCore/Tests`: 16 XCTest cases covering grouping, protection rules, the habit log and its persistence, the heuristic, Create ML training and prediction (held-out accuracy, unseen apps, regret relabel), the notification policy, CPU averaging, preference decoding, and a live sampler smoke test.
+- `RamCleanCore/Tests`: 19 XCTest cases covering the disk scanner on a fake home folder (caches, thresholds, `~/Library` skipped, no duplicates, Trash), cache naming, durations, reason text,  grouping, protection rules, the habit log and its persistence, the heuristic, Create ML training and prediction (held-out accuracy, unseen apps, regret relabel), the notification policy, CPU averaging, preference decoding, and a live sampler smoke test.
 - Manual end-to-end test on this Mac (macOS 26.6, Intel, 32 GB): live grouping and verdicts were checked, and quitting from the window was exercised. That covered the log event, the training example, terminate, and relaunch → regret relabel to `keep`. Screenshots in `docs/images` are from that run.
 - Not automatically tested: the SwiftUI views, notification button taps, and Force Quit follow-ups.
 
@@ -106,6 +115,8 @@ The model trains only once there are at least 8 answers, with at least 3 quits a
 - Footprint memory double-counts nothing, but shared memory isn't split. An app's number is what quitting it roughly frees, not an exact figure.
 - "Playing audio" depends on Core Audio's process list. Apps that play audio through a separate system process might not be detected.
 - Idle detection uses system-wide input, so time in front is credited while you're at the Mac even if you're only reading.
-- Disk is a gauge and a warning only; RamClean doesn't find or delete large files.
+- Measuring the Trash needs Full Disk Access, which RamClean doesn't ask for, so its size may show as "unknown".
+- The large-file scan walks your whole home folder (outside `~/Library`), which can take a minute or more on a full drive. Files inside `~/Library` (e.g. Mail, Messages attachments, Docker disk images) aren't listed except through the cache rules.
+- Moving a cache folder for a running app to the Trash is usually fine, but the app may recreate it immediately.
 - Notifications need the app to stay running (it keeps running in the menu bar when the window is closed). There's no launch-at-login yet.
 - Feedback is saved locally only; there's no place to send it yet.

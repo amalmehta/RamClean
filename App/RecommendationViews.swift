@@ -137,7 +137,11 @@ struct DiskRecommendations: View {
             }
         }
         .frame(width: 560, height: 500)
-        .onAppear { if model.diskReport == nil { model.scanDisk() } }
+        // Show the last results right away; refresh them in the background if they're over 30 minutes old.
+        .onAppear {
+            if let r = model.diskReport, Date().timeIntervalSince(r.scannedAt) < 30 * 60 { return }
+            model.scanDisk()
+        }
         .confirmationDialog(pending.map { "Move “\($0.name)” to the Trash?" } ?? "", isPresented: Binding(
             get: { pending != nil }, set: { if !$0 { pending = nil } }), presenting: pending) { item in
             Button("Move to Trash", role: .destructive) { error = model.moveToTrash(item) }
@@ -164,18 +168,20 @@ struct DiskRecommendations: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("What you could clear").font(.headline)
+                if let r = model.diskReport {
+                    Text("About \(Format.bytes(UInt64(r.reclaimableBytes))) can go to the Trash. Space comes back when you empty it.")
+                        .font(.callout)
+                    Text("Scanned \(r.scannedAt.formatted(.relative(presentation: .named))). RamClean never empties the Trash or deletes anything itself.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if let step = model.diskScanStep {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
-                        Text("Scanning \(step)… results appear below as they're found").font(.callout).foregroundStyle(.secondary)
+                        Text(model.diskReport == nil || model.diskReport!.scannedAt > Date().addingTimeInterval(-5)
+                             ? "Scanning \(step)… results appear below as they're found"
+                             : "Updating: checking \(step)…")
+                            .font(.callout).foregroundStyle(.secondary)
                     }
-                    Text("macOS may ask to let RamClean see your Desktop, Documents and Downloads; it only reads sizes.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else if let r = model.diskReport {
-                    Text("About \(Format.bytes(UInt64(r.reclaimableBytes))) can go to the Trash. Space comes back when you empty it.")
-                        .font(.callout)
-                    Text("Scanned \(r.scannedAt.formatted(date: .omitted, time: .shortened)). RamClean never empties the Trash or deletes anything itself.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             Spacer()

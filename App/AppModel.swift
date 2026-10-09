@@ -61,6 +61,11 @@ final class AppModel: ObservableObject {
         habitStore = HabitStore(directory: dataDirectory)
         model = DeadweightModel(directory: dataDirectory)
         prefs = Self.loadPrefs()
+        // Last disk scan, so "What to clear" opens instantly; it refreshes in the background.
+        if let data = try? Data(contentsOf: dataDirectory.appendingPathComponent("disk-report.json")),
+           let saved = try? HabitStore.decoder.decode(DiskReport.self, from: data) {
+            diskReport = saved
+        }
         modelStatus = model.status
         events = habitStore.recentEvents
     }
@@ -221,7 +226,7 @@ final class AppModel: ObservableObject {
                     sendAlert(AlertRecommender.disk(s, report))
                 } else {
                     diskAlertWaitingForScan = true
-                    scanDisk()
+                    scanDisk(byUser: false)
                 }
             }
         }
@@ -312,25 +317,35 @@ final class AppModel: ObservableObject {
     // MARK: - Disk
 
     /// Scans in the background; the UI shows `diskScanStep` until it's done.
-    func scanDisk() {
+    /// `byUser` is true when you opened the Disk list or pressed Rescan: only then may the scan
+    /// read Desktop, Documents and Downloads for the first time, since that can raise a macOS
+    /// permission prompt that would otherwise stall a background scan until someone answers it.
+    func scanDisk(byUser: Bool = true) {
         guard diskScanStep == nil else { return }
         diskScanStep = "starting"
+        let askedKey = "RamCleanScannedProtectedFolders"
         var scanner = DiskScanner()
+        scanner.avoidProtectedFolders = !byUser && !UserDefaults.standard.bool(forKey: askedKey)
         scanner.staleDays = prefs.staleDays
         scanner.activeDays = prefs.activeDays
         let keep = prefs
         scanner.isKept = { keep.matches(keep.alwaysKeep + keep.workTools, $0) }
         scanner.runningAppPaths = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.path })
+        // With earlier results on screen, keep showing them until the new scan is done;
+        // on a first scan, show results as they arrive.
+        let firstScan = diskReport == nil
         DispatchQueue.global(qos: .utility).async {
             let report = scanner.scan(progress: { step, found in
                 let partial = DiskReport(items: found.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }, scannedAt: Date())
                 DispatchQueue.main.async {
                     self.diskScanStep = step
-                    if !found.isEmpty { self.diskReport = partial }
+                    if firstScan && !found.isEmpty { self.diskReport = partial }
                 }
             })
             DispatchQueue.main.async {
+                if byUser { UserDefaults.standard.set(true, forKey: askedKey) }
                 self.diskReport = report
+                self.saveDiskReport()
                 self.diskScanStep = nil
                 if self.diskAlertWaitingForScan, let s = self.system {
                     self.diskAlertWaitingForScan = false
@@ -352,9 +367,15 @@ final class AppModel: ObservableObject {
                        detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) · \(item.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))",
                        at: Date())
         diskReport?.items.removeAll { $0.id == item.id }
+        saveDiskReport()
         refreshEvents()
         tick()
         return nil
+    }
+
+    private func saveDiskReport() {
+        guard let r = diskReport, let data = try? HabitStore.encoder.encode(r) else { return }
+        try? data.write(to: dataDirectory.appendingPathComponent("disk-report.json"), options: .atomic)
     }
 
     /// Drives you can move big files to (external and network volumes, not this Mac's own disk).
@@ -396,6 +417,7 @@ final class AppModel: ObservableObject {
                     self.habitStore.log(.movedOffMac, key: "disk", name: item.name,
                                         detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) → \(target.path)", at: Date())
                     self.diskReport?.items.removeAll { $0.id == item.id }
+                    self.saveDiskReport()
                     self.refreshEvents()
                     self.tick()
                 }

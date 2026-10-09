@@ -102,6 +102,7 @@ CHANGELOG:
 - 2026-10-02 — added a DELIVERABLES field after CONTEXT
 - 2026-10-02 — added meta-instruction: every project has a system design doc at docs/SYSTEM-DESIGN.md
 - 2026-10-05 — added meta-instruction: applications include a settings button or tab
+- 2026-10-08 — "What to clear" is fast: opens instantly with the last results and refreshes in the background; large files and projects come from Spotlight, folder sizes use fts in parallel (full scan 87 s, was over 10 min)
 - 2026-10-08 — threshold alerts for memory, CPU and disk with recommendations and a one-tap fix; stale-item suggestions (unused apps, old downloads, old project build folders) that never touch active work; Move to… an external drive or folder
 - 2026-10-08 — pushed to GitHub as a private repo: https://github.com/amalmehta/RamClean
 - 2026-10-08 — new custom icon: a friendly ram with curled golden horns and sparkles (picked from three concepts)

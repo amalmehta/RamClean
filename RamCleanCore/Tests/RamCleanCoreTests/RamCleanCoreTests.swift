@@ -251,6 +251,7 @@ final class RecommendationTests: XCTestCase {
         sc.minAppBytes = 1
         sc.appFolders = [home.appendingPathComponent("Apps")]
         sc.appLastUsed = { _ in nil }
+        sc.useSpotlight = false // temp folders aren't indexed; exercise the folder walk
         return sc
     }
 
@@ -334,6 +335,19 @@ final class RecommendationTests: XCTestCase {
         XCTAssertNil(item("this-week.zip"))
         XCTAssertEqual(report.items(.unusedApp).map(\.name), ["OldGame"])
         XCTAssertNotNil(item("OldGame")?.caution)
+
+        // A background scan stays out of Desktop, Documents and Downloads (no permission prompts).
+        try write("Documents/Code/old-docs-site/package.json", mb: 0)
+        try write("Documents/Code/old-docs-site/node_modules/x/index.js", mb: 3)
+        for f in ["Documents/Code/old-docs-site/package.json", "Documents/Code/old-docs-site/node_modules/x/index.js",
+                  "Documents/Code/old-docs-site/node_modules/x", "Documents/Code/old-docs-site/node_modules"] { try age(f, days: 60) }
+        sc.avoidProtectedFolders = true
+        let quiet = sc.scan()
+        XCTAssertNil(quiet.items.first { $0.name == "Old Installer.dmg" }, "Downloads not read")
+        XCTAssertNil(quiet.items.first { $0.name == "old-docs-site › node_modules" }, "Documents not read")
+        XCTAssertNotNil(quiet.items.first { $0.name == "old-site › node_modules" }, "other folders still scanned")
+        sc.avoidProtectedFolders = false
+        XCTAssertNotNil(sc.scan().items.first { $0.name == "old-docs-site › node_modules" })
     }
 
     func testPrettyNamesAndDurations() {

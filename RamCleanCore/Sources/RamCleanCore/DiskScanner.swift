@@ -2,8 +2,8 @@ import CoreServices
 import Foundation
 
 /// Something on disk worth a look, and why.
-public struct DiskItem: Identifiable, Equatable, Sendable {
-    public enum Kind: String, Sendable, CaseIterable {
+public struct DiskItem: Identifiable, Equatable, Sendable, Codable {
+    public enum Kind: String, Sendable, CaseIterable, Codable {
         case cache, buildArtifact, unusedApp, oldDownload, largeFile, trash
 
         public var title: String {
@@ -40,7 +40,7 @@ public struct DiskItem: Identifiable, Equatable, Sendable {
     }
 }
 
-public struct DiskReport: Equatable, Sendable {
+public struct DiskReport: Equatable, Sendable, Codable {
     public var items: [DiskItem]
     public var scannedAt: Date
 
@@ -79,6 +79,19 @@ public struct DiskScanner {
     public var runningAppPaths: Set<String> = []
     /// When an app was last opened (Spotlight's record); replaceable for tests.
     public var appLastUsed: (URL) -> Date? = DiskScanner.spotlightLastUsed
+    /// Ask Spotlight for large files and code projects instead of walking the home folder
+    /// (seconds instead of many minutes). Falls back to walking if Spotlight can't answer.
+    public var useSpotlight = true
+    /// Stay out of Desktop, Documents and Downloads. Reading them can raise a macOS permission
+    /// prompt that blocks the scan until someone answers, so background scans set this until
+    /// you've run a scan yourself. Spotlight's large-file results there still count (no access needed).
+    public var avoidProtectedFolders = false
+    var protectedFolders: [String] {
+        ["Desktop", "Documents", "Downloads"].map { Self.realPath(home.appendingPathComponent($0).path) + "/" }
+    }
+    func isProtected(_ path: String) -> Bool {
+        avoidProtectedFolders && protectedFolders.contains { Self.realPath(path).hasPrefix($0) || Self.realPath(path) + "/" == $0 }
+    }
     public var now = Date()
 
     public init(home: URL = FileManager.default.homeDirectoryForCurrentUser) {
@@ -124,43 +137,43 @@ public struct DiskScanner {
         var items: [DiskItem] = []
         var claimed: [String] = []
 
-        progress("developer caches", items)
+        progress("developer and app caches", items)
+        // Gather every cache candidate first, then measure them all in parallel.
+        var candidates: [(url: URL, make: (Int64) -> DiskItem)] = []
         for k in Self.known {
             let url = home.appendingPathComponent(k.path)
-            guard exists(url), !isCancelled() else { continue }
-            let size = Self.allocatedSize(url)
-            guard size >= minCacheBytes else { continue }
-            items.append(DiskItem(name: k.name, path: url.path, bytes: size, kind: .cache, reason: k.reason,
-                                  caution: k.caution, canTrash: k.canTrash))
-            claimed.append(url.path)
+            guard exists(url) else { continue }
+            candidates.append((url, { DiskItem(name: k.name, path: url.path, bytes: $0, kind: .cache, reason: k.reason,
+                                               caution: k.caution, canTrash: k.canTrash) }))
         }
-
-        progress("app caches", items)
         for (folder, reason) in [("Library/Caches", "App cache; the app rebuilds it as needed"),
                                  (".cache", "Tool cache (e.g. downloaded models or packages); downloaded again when needed")] {
             let parent = home.appendingPathComponent(folder)
-            let children = (try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)) ?? []
-            for child in children where !isCancelled() {
-                let size = Self.allocatedSize(child)
-                guard size >= minCacheBytes else { continue }
-                items.append(DiskItem(name: Self.prettyCacheName(child.lastPathComponent), path: child.path, bytes: size,
-                                      kind: .cache, reason: reason))
-                claimed.append(child.path)
+            for child in (try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)) ?? [] {
+                candidates.append((child, { DiskItem(name: Self.prettyCacheName(child.lastPathComponent), path: child.path,
+                                                     bytes: $0, kind: .cache, reason: reason) }))
             }
+        }
+        let sizes = Self.allocatedSizes(candidates.map(\.url), isCancelled: isCancelled)
+        for (c, size) in zip(candidates, sizes) where size >= minCacheBytes {
+            items.append(c.make(size))
+            claimed.append(c.url.path)
         }
 
         progress("apps you don't use", items)
         items += unusedApps(isCancelled: isCancelled)
 
         progress("old downloads", items)
-        let downloads = oldDownloads()
+        let downloads = avoidProtectedFolders ? [] : oldDownloads()
         items += downloads
 
-        progress("projects and large files in your home folder", items)
-        let walk = walkHome(excluding: claimed, skipFiles: Set(downloads.map(\.path)), isCancelled: isCancelled)
-        items += walk.largeFiles
+        progress("large files and projects", items)
+        let skipFiles = Set(downloads.map(\.path))
+        let found = (useSpotlight ? spotlightSearch(excluding: claimed, skipFiles: skipFiles) : nil)
+            ?? walkHome(excluding: claimed, skipFiles: skipFiles, isCancelled: isCancelled)
+        items += found.largeFiles
         progress("build files in old projects", items)
-        items += buildArtifacts(in: walk.projects, isCancelled: isCancelled)
+        items += buildArtifacts(in: found.projects.filter { !isProtected($0) }, isCancelled: isCancelled)
 
         progress("the Trash", items)
         let trash = home.appendingPathComponent(".Trash")
@@ -210,21 +223,61 @@ public struct DiskScanner {
             guard let v = try? url.resourceValues(forKeys: Set(keys)) else { continue }
             if v.isDirectory == true {
                 // Don't wander through dependency trees: they're judged as a whole later.
-                if Self.artifacts[url.lastPathComponent] != nil || skip.contains(Self.realPath(url.path)) { e.skipDescendants() }
+                if Self.artifacts[url.lastPathComponent] != nil || skip.contains(Self.realPath(url.path)) || isProtected(url.path) {
+                    e.skipDescendants()
+                }
                 continue
             }
             if Self.projectMarkers.contains(url.lastPathComponent) { projects.insert(url.deletingLastPathComponent().path) }
             guard v.isRegularFile == true, let size = v.totalFileAllocatedSize.map(Int64.init), size >= largeFileBytes,
                   !skipFilesReal.contains(url.path) else { continue }
             let opened = [v.contentAccessDate, v.contentModificationDate].compactMap { $0 }.max()
-            if isActive(opened) { continue } // you're working with it
-            let stale = (daysSince(opened) ?? 0) >= staleDays
-            var reason = Self.largeFileReason(url, lastOpened: opened, now: now)
-            if stale { reason += ". Not needed day to day: move it to an external drive or cloud storage" }
-            found.append(DiskItem(name: url.lastPathComponent, path: url.path, bytes: size, kind: .largeFile,
-                                  reason: reason, lastOpened: opened, suggestMove: stale))
+            if let item = largeFileItem(url, size: size, opened: opened) { found.append(item) }
         }
         return (Array(found.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }.prefix(maxLargeFiles)), projects)
+    }
+
+    /// A large-file entry, or nil if it's active work (opened or changed within `activeDays`).
+    func largeFileItem(_ url: URL, size: Int64, opened: Date?) -> DiskItem? {
+        if isActive(opened) { return nil }
+        let stale = (daysSince(opened) ?? 0) >= staleDays
+        var reason = Self.largeFileReason(url, lastOpened: opened, now: now)
+        if stale { reason += ". Not needed day to day: move it to an external drive or cloud storage" }
+        return DiskItem(name: url.lastPathComponent, path: url.path, bytes: size, kind: .largeFile,
+                        reason: reason, lastOpened: opened, suggestMove: stale)
+    }
+
+    /// Large files and code projects straight from Spotlight's index. Nil when Spotlight
+    /// can't run the query (indexing off), so the caller walks the folder instead.
+    func spotlightSearch(excluding claimed: [String], skipFiles: Set<String>) -> (largeFiles: [DiskItem], projects: Set<String>)? {
+        let homePath = Self.realPath(home.path)
+        let library = homePath + "/Library/", apps = homePath + "/Applications/"
+        let claimedDirs = claimed.map { Self.realPath($0) + "/" }
+        func usable(_ path: String) -> Bool {
+            guard path.hasPrefix(homePath + "/"), !path.hasPrefix(library), !path.hasPrefix(apps),
+                  !claimedDirs.contains(where: path.hasPrefix) else { return false }
+            let parts = path.dropFirst(homePath.count + 1).split(separator: "/")
+            return !parts.contains { $0.hasPrefix(".") || Self.artifacts[String($0)] != nil }
+        }
+
+        let sizeQuery = "kMDItemFSSize >= \(largeFileBytes)"
+        guard let big = Spotlight.query(sizeQuery, scope: home) else { return nil }
+        var files: [DiskItem] = []
+        let bigPaths = big.compactMap { Spotlight.string($0, kMDItemPath) }
+        for (item, path) in zip(big, big.map { Spotlight.string($0, kMDItemPath) }) {
+            guard let path, usable(path), !skipFiles.contains(path),
+                  !bigPaths.contains(where: { $0 != path && path.hasPrefix($0 + "/") }) else { continue } // inside a bigger bundle
+            let size = (Spotlight.number(item, "kMDItemPhysicalSize" as CFString) ?? Spotlight.number(item, kMDItemFSSize)).map(Int64.init) ?? 0
+            guard size >= largeFileBytes else { continue }
+            let opened = [Spotlight.date(item, kMDItemLastUsedDate), Spotlight.date(item, kMDItemFSContentChangeDate)].compactMap { $0 }.max()
+            if let d = largeFileItem(URL(fileURLWithPath: path), size: size, opened: opened) { files.append(d) }
+        }
+
+        let markerQuery = Self.projectMarkers.map { "kMDItemFSName == \"\($0)\"" }.joined(separator: " || ")
+        guard let markers = Spotlight.query(markerQuery, scope: home) else { return nil }
+        let projects = Set(markers.compactMap { Spotlight.string($0, kMDItemPath) }.filter(usable)
+            .map { ($0 as NSString).deletingLastPathComponent })
+        return (Array(files.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }.prefix(maxLargeFiles)), projects)
     }
 
     /// The newest change anywhere near the top of a project (its files, and git's index/HEAD).
@@ -243,8 +296,8 @@ public struct DiskScanner {
 
     /// Dependency and build folders inside projects you haven't touched in `activeDays`.
     func buildArtifacts(in projects: Set<String>, isCancelled: () -> Bool) -> [DiskItem] {
-        var out: [DiskItem] = []
         let fm = FileManager.default
+        var candidates: [(dir: URL, make: (Int64) -> DiskItem)] = []
         for path in projects.sorted() where !isCancelled() {
             let root = URL(fileURLWithPath: path)
             let activity = lastActivity(ofProject: root)
@@ -255,15 +308,15 @@ public struct DiskScanner {
                 guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
                 let written = try? dir.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
                 if isActive(written) { continue } // a build may be running
-                let size = Self.allocatedSize(dir)
-                guard size >= minArtifactBytes else { continue }
                 let idle = daysSince(activity).map { "\(HumanFormat.duration(minutes: $0 * 1440)) ago" } ?? "a long time ago"
-                out.append(DiskItem(name: "\(root.lastPathComponent) › \(folder)", path: dir.path, bytes: size, kind: .buildArtifact,
-                                    reason: "Project last changed \(idle). These are build or dependency files; they come back with \(rebuild)",
-                                    lastOpened: activity))
+                candidates.append((dir, { DiskItem(name: "\(root.lastPathComponent) › \(folder)", path: dir.path, bytes: $0, kind: .buildArtifact,
+                                                   reason: "Project last changed \(idle). These are build or dependency files; they come back with \(rebuild)",
+                                                   lastOpened: activity) }))
             }
         }
-        return out.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }
+        let sizes = Self.allocatedSizes(candidates.map(\.dir), isCancelled: isCancelled)
+        return zip(candidates, sizes).filter { $0.1 >= minArtifactBytes }.map { $0.0.make($0.1) }
+            .sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }
     }
 
     /// Apps in /Applications not opened in `staleDays`, by Spotlight's record. Apple apps,
@@ -278,15 +331,15 @@ public struct DiskScanner {
                 guard !running.contains(Self.realPath(app.path)),
                       let id = Bundle(url: app)?.bundleIdentifier, !id.hasPrefix("com.apple."), !isKept(id),
                       let used = appLastUsed(app), let days = daysSince(used), days >= staleDays else { continue }
-                let size = Self.allocatedSize(app)
-                guard size >= minAppBytes else { continue }
-                out.append(DiskItem(name: app.deletingPathExtension().lastPathComponent, path: app.path, bytes: size, kind: .unusedApp,
+                out.append(DiskItem(name: app.deletingPathExtension().lastPathComponent, path: app.path, bytes: nil, kind: .unusedApp,
                                     reason: "Not opened in \(HumanFormat.duration(minutes: days * 1440)). Uninstall it by moving it to the Trash",
                                     caution: "Its settings in ~/Library stay behind; reinstall from the developer or the App Store if you need it again",
                                     lastOpened: used))
             }
         }
-        return out.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }
+        let sizes = Self.allocatedSizes(out.map { URL(fileURLWithPath: $0.path) }, isCancelled: isCancelled)
+        for i in out.indices { out[i].bytes = sizes[i] }
+        return out.filter { ($0.bytes ?? 0) >= minAppBytes }.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }
     }
 
     /// Big things in ~/Downloads you haven't opened or changed in `staleDays`.
@@ -294,18 +347,19 @@ public struct DiskScanner {
         let dir = home.appendingPathComponent("Downloads")
         let keys: Set<URLResourceKey> = [.contentAccessDateKey, .contentModificationDateKey]
         let entries = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles])) ?? []
-        var out: [DiskItem] = []
+        var old: [(url: URL, touched: Date?)] = []
         for url in entries {
             let v = try? url.resourceValues(forKeys: keys)
             let touched = [v?.contentAccessDate, v?.contentModificationDate].compactMap { $0 }.max()
             guard let days = daysSince(touched), days >= staleDays else { continue }
-            let size = Self.allocatedSize(url)
-            guard size >= oldDownloadBytes else { continue }
-            out.append(DiskItem(name: url.lastPathComponent, path: url.path, bytes: size, kind: .oldDownload,
-                                reason: Self.largeFileReason(url, lastOpened: touched, now: now),
-                                lastOpened: touched, suggestMove: size >= largeFileBytes))
+            old.append((url, touched))
         }
-        return out.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }
+        let sizes = Self.allocatedSizes(old.map(\.url), isCancelled: { false })
+        return zip(old, sizes).filter { $0.1 >= oldDownloadBytes }.map { o, size in
+            DiskItem(name: o.url.lastPathComponent, path: o.url.path, bytes: size, kind: .oldDownload,
+                     reason: Self.largeFileReason(o.url, lastOpened: o.touched, now: now),
+                     lastOpened: o.touched, suggestMove: size >= largeFileBytes)
+        }.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }
     }
 
     static func largeFileReason(_ url: URL, lastOpened: Date?, now: Date = Date()) -> String {
@@ -342,23 +396,34 @@ public struct DiskScanner {
 
     private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
 
+    /// Space a file or folder takes on disk, using fts (the same walk `du` does): about
+    /// twice as fast as Foundation's enumerator because it doesn't build an object per file.
     public static func allocatedSize(_ url: URL) -> Int64 {
-        let fm = FileManager.default
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return 0 }
-        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .isRegularFileKey]
-        if !isDir.boolValue {
-            return Int64((try? url.resourceValues(forKeys: keys))?.totalFileAllocatedSize ?? 0)
-        }
-        guard let e = fm.enumerator(at: url, includingPropertiesForKeys: Array(keys), options: [],
-                                    errorHandler: { _, _ in true }) else { return 0 }
         var total: Int64 = 0
-        for case let f as URL in e {
-            if let v = try? f.resourceValues(forKeys: keys), v.isRegularFile == true {
-                total += Int64(v.totalFileAllocatedSize ?? 0)
+        url.path.withCString { p in
+            var paths: [UnsafeMutablePointer<CChar>?] = [strdup(p), nil]
+            defer { free(paths[0]) }
+            guard let fts = fts_open(&paths, FTS_PHYSICAL | FTS_NOCHDIR | FTS_XDEV, nil) else { return }
+            defer { fts_close(fts) }
+            while let ent = fts_read(fts) {
+                if Int32(ent.pointee.fts_info) == FTS_F, let st = ent.pointee.fts_statp {
+                    total += Int64(st.pointee.st_blocks) * 512
+                }
             }
         }
         return total
+    }
+
+    /// Sizes many folders at once, several at a time.
+    static func allocatedSizes(_ urls: [URL], isCancelled: () -> Bool) -> [Int64] {
+        var sizes = [Int64](repeating: 0, count: urls.count)
+        guard !urls.isEmpty, !isCancelled() else { return sizes }
+        let lock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: urls.count) { i in
+            let size = allocatedSize(urls[i])
+            lock.lock(); sizes[i] = size; lock.unlock()
+        }
+        return sizes
     }
 }
 
@@ -409,4 +474,21 @@ extension Assessment {
         if f.timesKept > 0 { r.append("You kept it \(Int(f.timesKept))× before") }
         return r
     }
+}
+
+/// Thin wrapper over Spotlight's synchronous query API.
+enum Spotlight {
+    /// The matching items, or nil if Spotlight couldn't run the query.
+    static func query(_ text: String, scope: URL) -> [MDItem]? {
+        guard let q = MDQueryCreate(kCFAllocatorDefault, text as CFString, nil, nil) else { return nil }
+        MDQuerySetSearchScope(q, [scope.path] as CFArray, 0)
+        guard MDQueryExecute(q, CFOptionFlags(kMDQuerySynchronous.rawValue)) else { return nil }
+        return (0..<MDQueryGetResultCount(q)).compactMap { i in
+            MDQueryGetResultAtIndex(q, i).map { Unmanaged<MDItem>.fromOpaque($0).takeUnretainedValue() }
+        }
+    }
+
+    static func string(_ item: MDItem, _ key: CFString) -> String? { MDItemCopyAttribute(item, key) as? String }
+    static func number(_ item: MDItem, _ key: CFString) -> Double? { (MDItemCopyAttribute(item, key) as? NSNumber)?.doubleValue }
+    static func date(_ item: MDItem, _ key: CFString) -> Date? { MDItemCopyAttribute(item, key) as? Date }
 }

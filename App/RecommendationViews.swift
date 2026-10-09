@@ -185,7 +185,8 @@ struct DiskRecommendations: View {
                 }
             }
             Spacer()
-            Button("Rescan") { model.scanDisk() }.disabled(model.diskScanStep != nil)
+            Button("Rescan") { model.scanDisk(fresh: true) }.disabled(model.diskScanStep != nil)
+                .help("Measure everything again from scratch")
         }
         .padding(14)
     }

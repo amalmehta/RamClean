@@ -38,6 +38,8 @@ final class AppModel: ObservableObject {
     let habitStore: HabitStore
     let model: DeadweightModel
     let notifier = Notifier()
+    /// Folder sizes remembered between disk scans, so background refreshes only re-measure what changed.
+    let sizeCache = SizeCache()
 
     private let processSampler = ProcessSampler()
     private let systemSampler = SystemSampler()
@@ -320,12 +322,15 @@ final class AppModel: ObservableObject {
     /// `byUser` is true when you opened the Disk list or pressed Rescan: only then may the scan
     /// read Desktop, Documents and Downloads for the first time, since that can raise a macOS
     /// permission prompt that would otherwise stall a background scan until someone answers it.
-    func scanDisk(byUser: Bool = true) {
+    /// `fresh` (the Rescan button) measures every folder again instead of reusing remembered sizes.
+    func scanDisk(byUser: Bool = true, fresh: Bool = false) {
         guard diskScanStep == nil else { return }
+        sizeCache.reuse = !fresh
         diskScanStep = "starting"
         let askedKey = "RamCleanScannedProtectedFolders"
         var scanner = DiskScanner()
         scanner.avoidProtectedFolders = !byUser && !UserDefaults.standard.bool(forKey: askedKey)
+        scanner.sizeCache = sizeCache
         scanner.staleDays = prefs.staleDays
         scanner.activeDays = prefs.activeDays
         let keep = prefs

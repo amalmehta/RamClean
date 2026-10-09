@@ -350,6 +350,28 @@ final class RecommendationTests: XCTestCase {
         XCTAssertNotNil(sc.scan().items.first { $0.name == "old-docs-site › node_modules" })
     }
 
+    func testBulkSizingMatchesFtsAndSizeCacheReuse() throws {
+        for i in 0..<5 { try write("tree/a\(i)/b/c/file\(i).bin", mb: 1) }
+        try write("tree/top.bin", mb: 2)
+        let tree = home.appendingPathComponent("tree")
+        XCTAssertEqual(DiskScanner.allocatedSize(tree), DiskScanner.ftsSize(tree.path))
+        XCTAssertGreaterThanOrEqual(DiskScanner.allocatedSize(tree), 7 * 1_048_576)
+        XCTAssertEqual(DiskScanner.allocatedSize(home.appendingPathComponent("tree/top.bin")), DiskScanner.ftsSize(tree.path + "/top.bin"))
+
+        let cache = SizeCache()
+        var measured = 0
+        func size() -> Int64 { cache.size(of: tree, now: Date(), measure: { measured += 1; return DiskScanner.allocatedSize($0) }) }
+        let first = size()
+        XCTAssertEqual(size(), first)
+        XCTAssertEqual(measured, 1, "unchanged folder: remembered size reused")
+        try write("tree/new.bin", mb: 1) // changes the folder's own modification time
+        XCTAssertGreaterThan(size(), first)
+        XCTAssertEqual(measured, 2, "folder changed: measured again")
+        cache.reuse = false
+        _ = size()
+        XCTAssertEqual(measured, 3, "Rescan measures fresh")
+    }
+
     func testPrettyNamesAndDurations() {
         XCTAssertEqual(DiskScanner.prettyCacheName("com.spotify.client"), "Spotify client cache")
         XCTAssertEqual(DiskScanner.prettyCacheName("Homebrew"), "Homebrew")

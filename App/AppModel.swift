@@ -38,8 +38,9 @@ final class AppModel: ObservableObject {
     let habitStore: HabitStore
     let model: DeadweightModel
     let notifier = Notifier()
-    /// Folder sizes remembered between disk scans, so background refreshes only re-measure what changed.
-    let sizeCache = SizeCache()
+    /// Folder sizes remembered between disk scans (and app launches, via sizes.json), so
+    /// refreshes only re-measure what changed.
+    let sizeCache: SizeCache
 
     private let processSampler = ProcessSampler()
     private let systemSampler = SystemSampler()
@@ -63,6 +64,7 @@ final class AppModel: ObservableObject {
         habitStore = HabitStore(directory: dataDirectory)
         model = DeadweightModel(directory: dataDirectory)
         prefs = Self.loadPrefs()
+        sizeCache = SizeCache(contentsOf: dataDirectory.appendingPathComponent("sizes.json"))
         // Last disk scan, so "What to clear" opens instantly; it refreshes in the background.
         if let data = try? Data(contentsOf: dataDirectory.appendingPathComponent("disk-report.json")),
            let saved = try? HabitStore.decoder.decode(DiskReport.self, from: data) {
@@ -381,6 +383,7 @@ final class AppModel: ObservableObject {
     private func saveDiskReport() {
         guard let r = diskReport, let data = try? HabitStore.encoder.encode(r) else { return }
         try? data.write(to: dataDirectory.appendingPathComponent("disk-report.json"), options: .atomic)
+        sizeCache.save(to: dataDirectory.appendingPathComponent("sizes.json"))
     }
 
     /// Drives you can move big files to (external and network volumes, not this Mac's own disk).

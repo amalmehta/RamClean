@@ -104,7 +104,8 @@ struct OverviewView: View {
     private func takeRequestedPanel() {
         guard let p = model.requestedPanel else { return }
         model.requestedPanel = nil
-        panel = p
+        panel = nil
+        DispatchQueue.main.async { panel = p }
     }
 
     @ViewBuilder private var gauges: some View {
@@ -125,7 +126,12 @@ struct OverviewView: View {
     }
 
     private func bar(_ p: UsagePanel, _ content: UsageBar) -> some View {
-        Button { panel = p } label: { content.contentShape(Rectangle()) }
+        // Reset first, then open on the next run loop: if a popover was dismissed without
+        // clearing its state, a click still reopens it instead of doing nothing.
+        Button {
+            panel = nil
+            DispatchQueue.main.async { panel = p }
+        } label: { content.contentShape(Rectangle()) }
             .buttonStyle(.plain)
             .help(p == .disk ? "Show caches and large files you could clear" : "Show recommendations")
             .accessibilityLabel("\(content.title) recommendations")

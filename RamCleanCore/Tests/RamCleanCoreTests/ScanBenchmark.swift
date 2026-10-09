@@ -1,20 +1,28 @@
 import XCTest
 @testable import RamCleanCore
 
-/// Times a real disk scan of your home folder: a first scan, then a refresh that reuses
-/// remembered sizes. Opt-in: RAMCLEAN_BENCH=1 swift test --filter ScanBenchmark
+/// Times a real disk scan of your home folder: a first scan, a refresh that reuses remembered
+/// sizes, and a scan after an app relaunch (sizes reloaded from disk).
+/// Opt-in: RAMCLEAN_BENCH=1 swift test --filter ScanBenchmark
 final class ScanBenchmark: XCTestCase {
     func testTimeRealScan() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["RAMCLEAN_BENCH"] == "1")
-        let cache = SizeCache()
-        for label in ["first scan", "refresh"] {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("ramclean-bench-sizes.json")
+        try? FileManager.default.removeItem(at: file)
+        var cache = SizeCache()
+        for label in ["first scan", "refresh", "after relaunch"] {
+            if label == "after relaunch" { cache.save(to: file); cache = SizeCache(contentsOf: file) }
             var scanner = DiskScanner()
             scanner.sizeCache = cache
             let t0 = Date()
-            var steps: [String] = []
-            let report = scanner.scan(progress: { step, _ in steps.append(String(format: "%@ @%.1fs", step, Date().timeIntervalSince(t0))) })
-            print("BENCH \(label): \(String(format: "%.1f", Date().timeIntervalSince(t0)))s, \(report.items.count) items, \(cache.hits) cached sizes reused")
-            print("BENCH   steps finished: " + steps.joined(separator: " · "))
+            var firstCache: Double?, lastCache = 0.0
+            let report = scanner.scan(progress: { _, found in
+                let caches = found.filter { $0.kind == .cache }.count
+                if caches > 0 { firstCache = firstCache ?? Date().timeIntervalSince(t0); lastCache = Date().timeIntervalSince(t0) }
+            })
+            print(String(format: "BENCH %@: %.1fs total; caches shown from %.1fs to %.1fs; %d items",
+                         label, Date().timeIntervalSince(t0), firstCache ?? -1, lastCache, report.items.count))
         }
     }
 }
+

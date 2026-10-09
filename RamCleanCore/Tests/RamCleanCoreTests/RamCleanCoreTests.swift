@@ -370,6 +370,16 @@ final class RecommendationTests: XCTestCase {
         cache.reuse = false
         _ = size()
         XCTAssertEqual(measured, 3, "Rescan measures fresh")
+
+        // Saved and reloaded (an app relaunch): still reused.
+        cache.reuse = true
+        let file = home.appendingPathComponent("sizes.json")
+        cache.save(to: file)
+        let reloaded = SizeCache(contentsOf: file)
+        XCTAssertEqual(reloaded.count, 1)
+        _ = reloaded.size(of: tree, now: Date(), measure: { _ in measured += 1; return 0 })
+        XCTAssertEqual(measured, 3, "reloaded size reused after relaunch")
+        XCTAssertEqual(reloaded.lastKnownSize(tree.path), DiskScanner.allocatedSize(tree))
     }
 
     func testPrettyNamesAndDurations() {

@@ -151,9 +151,9 @@ public struct DiskScanner {
                 progress("caches, apps, downloads and Spotlight", [])
                 let group = DispatchGroup(), queue = DispatchQueue.global(qos: .userInitiated)
                 queue.async(group: group) {
-                    let c = self.caches(isCancelled: isCancelled)
+                    // Each cache shows up the moment it's measured, not when all of them are done.
+                    let c = self.caches(isCancelled: isCancelled, onFound: { add("caches", [$0], report: progress) })
                     claimed = c.claimed
-                    add("app caches", c.items, report: progress)
                 }
                 queue.async(group: group) { add("apps you don't use", self.unusedApps(isCancelled: isCancelled), report: progress) }
                 queue.async(group: group) {
@@ -179,7 +179,8 @@ public struct DiskScanner {
     }
 
     /// Developer, app and tool caches over `minCacheBytes`, all measured in parallel.
-    func caches(isCancelled: () -> Bool) -> (items: [DiskItem], claimed: [String]) {
+    /// `onFound` is called (from any thread) for each one as soon as it's measured.
+    func caches(isCancelled: () -> Bool, onFound: (DiskItem) -> Void = { _ in }) -> (items: [DiskItem], claimed: [String]) {
         var candidates: [(url: URL, make: (Int64) -> DiskItem)] = []
         for k in Self.known {
             let url = home.appendingPathComponent(k.path)
@@ -195,7 +196,11 @@ public struct DiskScanner {
                                                      bytes: $0, kind: .cache, reason: reason) }))
             }
         }
-        let sizes = self.sizes(candidates.map(\.url), isCancelled: isCancelled)
+        let sizes = withoutActuallyEscaping(onFound) { onFound in
+            self.sizes(candidates.map(\.url), isCancelled: isCancelled, onEach: { i, size in
+                if size >= self.minCacheBytes { onFound(candidates[i].make(size)) }
+            })
+        }
         var items: [DiskItem] = [], claimed: [String] = []
         for (c, size) in zip(candidates, sizes) where size >= minCacheBytes {
             items.append(c.make(size))
@@ -510,14 +515,17 @@ public struct DiskScanner {
     }
 
     /// Sizes many folders at once, several at a time, reusing remembered sizes when allowed.
-    func sizes(_ urls: [URL], isCancelled: () -> Bool) -> [Int64] {
+    func sizes(_ urls: [URL], isCancelled: () -> Bool, onEach: (Int, Int64) -> Void = { _, _ in }) -> [Int64] {
         var sizes = [Int64](repeating: 0, count: urls.count)
         guard !urls.isEmpty, !isCancelled() else { return sizes }
         let lock = NSLock()
         let cache = sizeCache
-        DispatchQueue.concurrentPerform(iterations: urls.count) { i in
-            let size = cache?.size(of: urls[i], now: now, measure: Self.allocatedSize) ?? Self.allocatedSize(urls[i])
-            lock.lock(); sizes[i] = size; lock.unlock()
+        withoutActuallyEscaping(onEach) { onEach in
+            DispatchQueue.concurrentPerform(iterations: urls.count) { i in
+                let size = cache?.size(of: urls[i], now: now, measure: Self.allocatedSize) ?? Self.allocatedSize(urls[i])
+                lock.lock(); sizes[i] = size; lock.unlock()
+                onEach(i, size)
+            }
         }
         return sizes
     }
@@ -594,7 +602,12 @@ enum Spotlight {
 /// or renamed directly inside it). Deeper changes show up within `maxAge` or on a Rescan,
 /// which sets `reuse` to false so everything is measured fresh (and remembered again).
 public final class SizeCache {
-    struct Entry { var bytes: Int64; var mtime: timespec; var measuredAt: Date }
+    struct Entry: Codable {
+        var bytes: Int64
+        var mtimeSec: Int
+        var mtimeNsec: Int
+        var measuredAt: Date
+    }
     private var entries: [String: Entry] = [:]
     private let lock = NSLock()
     public var maxAge: TimeInterval = 6 * 3600
@@ -603,6 +616,27 @@ public final class SizeCache {
 
     public init() {}
 
+    /// Loads sizes saved by an earlier run, so a relaunch or reboot doesn't mean re-measuring everything.
+    public convenience init(contentsOf url: URL) {
+        self.init()
+        if let data = try? Data(contentsOf: url),
+           let saved = try? HabitStore.decoder.decode([String: Entry].self, from: data) {
+            entries = saved
+        }
+    }
+
+    public func save(to url: URL) {
+        lock.lock(); let snapshot = entries; lock.unlock()
+        if let data = try? HabitStore.encoder.encode(snapshot) { try? data.write(to: url, options: .atomic) }
+    }
+
+    public var count: Int { lock.lock(); defer { lock.unlock() }; return entries.count }
+
+    func lastKnownSize(_ path: String) -> Int64? {
+        lock.lock(); defer { lock.unlock() }
+        return entries[path]?.bytes
+    }
+
     func size(of url: URL, now: Date, measure: (URL) -> Int64) -> Int64 {
         var st = stat()
         let haveStat = lstat(url.path, &st) == 0
@@ -610,13 +644,15 @@ public final class SizeCache {
         let cached = entries[url.path]
         lock.unlock()
         if reuse, haveStat, let c = cached, now.timeIntervalSince(c.measuredAt) < maxAge,
-           c.mtime.tv_sec == st.st_mtimespec.tv_sec, c.mtime.tv_nsec == st.st_mtimespec.tv_nsec {
+           c.mtimeSec == st.st_mtimespec.tv_sec, c.mtimeNsec == st.st_mtimespec.tv_nsec {
             lock.lock(); hits += 1; lock.unlock()
             return c.bytes
         }
         let bytes = measure(url)
         if haveStat {
-            lock.lock(); entries[url.path] = Entry(bytes: bytes, mtime: st.st_mtimespec, measuredAt: now); lock.unlock()
+            lock.lock()
+            entries[url.path] = Entry(bytes: bytes, mtimeSec: st.st_mtimespec.tv_sec, mtimeNsec: st.st_mtimespec.tv_nsec, measuredAt: now)
+            lock.unlock()
         }
         return bytes
     }

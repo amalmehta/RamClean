@@ -1,6 +1,7 @@
 import AppKit
 import RamCleanCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Which usage bar was clicked.
 enum UsagePanel: String, Identifiable {
@@ -110,18 +111,17 @@ struct DiskRecommendations: View {
             Divider()
             if let report = model.diskReport {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    // Lazy: only the rows on screen are built, not all ~200.
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        SpaceSummary(report: report) { row($0) }
                         ForEach(DiskItem.Kind.allCases, id: \.self) { kind in
                             let items = report.items(kind)
                             if !items.isEmpty {
-                                Text(kind.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 14)
-                                VStack(spacing: 0) {
-                                    ForEach(items) { item in
-                                        DiskRow(item: item, moving: model.movingPaths.contains(item.path),
-                                                onTrash: { pending = item },
-                                                onMove: { folder, name in pendingMove = (item, folder, name) })
-                                        Divider().opacity(0.5)
-                                    }
+                                Text(kind.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                    .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 4)
+                                ForEach(items) { item in
+                                    row(item)
+                                    Divider().opacity(0.5)
                                 }
                             }
                         }
@@ -130,13 +130,13 @@ struct DiskRecommendations: View {
                                 .foregroundStyle(.secondary).padding(14)
                         }
                     }
-                    .padding(.vertical, 12)
+                    .padding(.bottom, 12)
                 }
             } else {
                 Spacer()
             }
         }
-        .frame(width: 560, height: 500)
+        .frame(width: 560, height: 560)
         // Show the last results right away; refresh them in the background if they're over 30 minutes old.
         .onAppear {
             if let r = model.diskReport, Date().timeIntervalSince(r.scannedAt) < 30 * 60 { return }
@@ -162,6 +162,12 @@ struct DiskRecommendations: View {
         .alert("That didn't work", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK") { error = nil }
         } message: { Text(error ?? "") }
+    }
+
+    private func row(_ item: DiskItem) -> DiskRow {
+        DiskRow(item: item, moving: model.movingPaths.contains(item.path),
+                onTrash: { pending = item },
+                onMove: { folder, name in pendingMove = (item, folder, name) })
     }
 
     private var header: some View {
@@ -202,7 +208,7 @@ struct DiskRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: item.path)).resizable().frame(width: 26, height: 26)
+            Image(nsImage: DiskIcons.icon(for: item)).resizable().frame(width: 26, height: 26)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(item.name).font(.body.weight(.medium)).lineLimit(1).truncationMode(.middle)
@@ -269,5 +275,100 @@ struct DiskRow: View {
         .controlSize(.small)
         .fixedSize()
         .accessibilityLabel("Move \(item.name) to another drive or folder")
+    }
+}
+
+/// The answer up front: how much space each kind of thing could free, and the biggest single wins.
+struct SpaceSummary<Row: View>: View {
+    var report: DiskReport
+    @ViewBuilder var row: (DiskItem) -> Row
+
+    var body: some View {
+        let totals = report.totals
+        let sum = max(1, totals.reduce(Int64(0)) { $0 + $1.bytes })
+        if !totals.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Where to win space: \(Format.bytes(UInt64(sum)))").font(.subheadline.weight(.semibold))
+                GeometryReader { geo in
+                    HStack(spacing: 2) {
+                        ForEach(totals, id: \.kind) { t in
+                            Rectangle().fill(t.kind.color)
+                                .frame(width: max(4, (geo.size.width - CGFloat(totals.count) * 2) * CGFloat(t.bytes) / CGFloat(sum)))
+                        }
+                    }
+                }
+                .frame(height: 10)
+                .clipShape(Capsule())
+                .accessibilityHidden(true)
+                LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], spacing: 4) {
+                    ForEach(totals, id: \.kind) { t in
+                        HStack(spacing: 6) {
+                            Circle().fill(t.kind.color).frame(width: 8, height: 8)
+                            Text(t.kind.shortTitle).font(.caption)
+                            Text(Format.bytes(UInt64(t.bytes))).font(.caption.weight(.semibold)).monospacedDigit()
+                        }
+                    }
+                }
+                Text("Biggest single wins").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 4)
+            }
+            .padding(.horizontal, 14).padding(.top, 12)
+            ForEach(report.biggestWins()) { item in row(item) }
+            Divider()
+        }
+    }
+}
+
+extension DiskItem.Kind {
+    var shortTitle: String {
+        switch self {
+        case .cache: return "Caches"
+        case .buildArtifact: return "Old project builds"
+        case .unusedApp: return "Unused apps"
+        case .oldDownload: return "Old downloads"
+        case .largeFile: return "Big files to move"
+        case .trash: return "Trash"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .cache: return .orange
+        case .buildArtifact: return .purple
+        case .unusedApp: return .pink
+        case .oldDownload: return .teal
+        case .largeFile: return .blue
+        case .trash: return .gray
+        }
+    }
+}
+
+/// Row icons without a per-file lookup: one icon per file type, cached, and real icons only
+/// for apps and the Trash. Looking up every file's own icon took 1.7 s on the main thread for
+/// ~180 rows; this takes a few milliseconds.
+@MainActor
+enum DiskIcons {
+    private static var cache: [String: NSImage] = [:]
+
+    static func icon(for item: DiskItem) -> NSImage {
+        let key: String
+        switch item.kind {
+        case .unusedApp: key = item.path
+        case .trash: key = "trash"
+        case .largeFile, .oldDownload:
+            let ext = (item.path as NSString).pathExtension.lowercased()
+            key = ext.isEmpty ? "folder" : "ext:" + ext
+        case .cache, .buildArtifact: key = "folder"
+        }
+        if let hit = cache[key] { return hit }
+        let image: NSImage
+        if key == "folder" {
+            image = NSWorkspace.shared.icon(for: .folder)
+        } else if key.hasPrefix("ext:") {
+            image = NSWorkspace.shared.icon(for: UTType(filenameExtension: String(key.dropFirst(4))) ?? .data)
+        } else {
+            image = NSWorkspace.shared.icon(forFile: item.path)
+        }
+        cache[key] = image
+        return image
     }
 }

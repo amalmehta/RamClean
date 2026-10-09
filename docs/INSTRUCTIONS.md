@@ -34,7 +34,7 @@ To time a real disk scan of your home folder, step by step:
 cd RamCleanCore && RAMCLEAN_BENCH=1 swift test --filter ScanBenchmark
 ```
 
-The 22 tests cover process grouping (helpers, and Claude Code inside Terminal), every protection rule, the habit log, the rule-of-thumb score, Create ML training (including apps it has never seen and the "regret" relabel), the notification policy (thresholds and cooldowns), loading preferences, the disk scanner on a fake home folder (including stale projects, unused apps and old downloads, and never active work), threshold alerts (sustain, repeat, recovery, snooze) and their recommendation text, the "why" text for each app, and a live smoke test of the samplers on this Mac.
+The 25 tests cover process grouping (helpers, and Claude Code inside Terminal), every protection rule, the habit log, the rule-of-thumb score, Create ML training (including apps it has never seen and the "regret" relabel), the notification policy (thresholds and cooldowns), loading preferences, the disk scanner on a fake home folder (including stale projects, unused apps and old downloads, and never active work), threshold alerts (sustain, repeat, recovery, snooze) and their recommendation text, the "why" text for each app, and a live smoke test of the samplers on this Mac.
 
 ## Using it
 
@@ -58,7 +58,7 @@ While a resource stays over its line, you're reminded at most once an hour. Afte
 
 - **Memory → What to quit:** your Dock apps ranked by memory. Each shows RamClean's call (Quit, Keep or Protected), the reasons ("Idle 3 h · Rarely used (1 of 14 days) · You quit it 2× before"), and Quit / Keep buttons. The header names the apps it recommends quitting and how much memory that frees.
 - **CPU → What's busy:** the same list ranked by CPU.
-- **Disk → What to clear:** opens instantly with the last scan's results. If they're more than 30 minutes old, a fresh scan runs in the background and replaces them when done. Refreshes reuse sizes of folders that haven't changed (remembered across relaunches), so they take a few seconds; **Rescan** measures everything from scratch (around 10–40 s). On the very first scan, results appear as each part finishes. It covers:
+- **Disk → What to clear:** opens instantly with the last scan's results. At the top, **Where to win space** shows how much each kind of thing could free (a coloured bar plus totals: caches, old project builds, unused apps, old downloads, big files to move, Trash) and the **three biggest single wins**, each with its buttons, so you see where the space is without scrolling. If they're more than 30 minutes old, a fresh scan runs in the background and replaces them when done. Refreshes reuse sizes of folders that haven't changed (remembered across relaunches), so they take a few seconds; **Rescan** measures everything from scratch (around 10–40 s). On the very first scan, results appear as each part finishes. It covers:
   - **Rebuildable caches:** app caches in `~/Library/Caches` and `~/.cache`, Xcode build data, archives and device support, simulator caches, and npm, Gradle and Cargo caches.
   - **Build files in projects you've stopped working on:** `node_modules`, `.venv`, `target`, `.build`, `build`, `dist` and similar, in code projects with no changes for 30 days. Each says how to get it back (e.g. `npm install`).
   - **Apps you don't use anymore:** apps in `/Applications` you haven't opened in 90 days, by Spotlight's record. Apple apps, running apps, your always-keep apps and work tools are never listed.

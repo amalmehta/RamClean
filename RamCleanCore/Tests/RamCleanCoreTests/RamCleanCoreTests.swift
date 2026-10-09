@@ -382,6 +382,22 @@ final class RecommendationTests: XCTestCase {
         XCTAssertEqual(reloaded.lastKnownSize(tree.path), DiskScanner.allocatedSize(tree))
     }
 
+    func testSummaryTotalsAndBiggestWins() {
+        let gb: Int64 = 1 << 30
+        let r = DiskReport(items: [
+            DiskItem(name: "uv", path: "/c/uv", bytes: 5 * gb, kind: .cache, reason: ""),
+            DiskItem(name: "Simulator devices", path: "/c/sim", bytes: 7 * gb, kind: .cache, reason: "", canTrash: false),
+            DiskItem(name: "npm", path: "/c/npm", bytes: 1 * gb, kind: .cache, reason: ""),
+            DiskItem(name: "site › node_modules", path: "/p/nm", bytes: 2 * gb, kind: .buildArtifact, reason: ""),
+            DiskItem(name: "trip.mov", path: "/m/trip.mov", bytes: 12 * gb, kind: .largeFile, reason: "", suggestMove: true),
+            DiskItem(name: "current.mov", path: "/m/cur.mov", bytes: 20 * gb, kind: .largeFile, reason: ""),   // not stale: not a win
+            DiskItem(name: "Trash", path: "/t", bytes: 3 * gb, kind: .trash, reason: "", canTrash: false),
+        ], scannedAt: Date())
+        XCTAssertEqual(r.totals.map(\.kind), [.largeFile, .cache, .trash, .buildArtifact])
+        XCTAssertEqual(r.totals.first { $0.kind == .cache }?.bytes, 6 * gb, "only trashable caches count")
+        XCTAssertEqual(r.biggestWins().map(\.name), ["trip.mov", "uv", "Trash"])
+    }
+
     func testPrettyNamesAndDurations() {
         XCTAssertEqual(DiskScanner.prettyCacheName("com.spotify.client"), "Spotify client cache")
         XCTAssertEqual(DiskScanner.prettyCacheName("Homebrew"), "Homebrew")

@@ -341,8 +341,16 @@ final class AppModel: ObservableObject {
         // With earlier results on screen, keep showing them until the new scan is done;
         // on a first scan, show results as they arrive.
         let firstScan = diskReport == nil
+        // Results stream in per folder; redraw at most 4 times a second so the list stays smooth.
+        let lastPublish = NSLock()
+        var publishedAt = Date.distantPast
         DispatchQueue.global(qos: .utility).async {
             let report = scanner.scan(progress: { step, found in
+                lastPublish.lock()
+                let due = Date().timeIntervalSince(publishedAt) >= 0.25
+                if due { publishedAt = Date() }
+                lastPublish.unlock()
+                guard due else { return }
                 let partial = DiskReport(items: found.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }, scannedAt: Date())
                 DispatchQueue.main.async {
                     self.diskScanStep = step

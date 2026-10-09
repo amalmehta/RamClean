@@ -52,6 +52,27 @@ public struct DiskReport: Equatable, Sendable, Codable {
     }
 
     public func items(_ kind: DiskItem.Kind) -> [DiskItem] { items.filter { $0.kind == kind } }
+
+    /// Something you can act on to win space: rebuildable or unused items you could trash,
+    /// big old files to move off the Mac, and the Trash itself (empty it in Finder).
+    static func isWin(_ i: DiskItem) -> Bool {
+        (i.bytes ?? 0) > 0 && (i.canTrash && i.kind != .largeFile || i.suggestMove || i.kind == .trash)
+    }
+
+    /// Space you could win per category, biggest first: the at-a-glance answer to "where's my space?".
+    public var totals: [(kind: DiskItem.Kind, bytes: Int64, count: Int)] {
+        DiskItem.Kind.allCases.compactMap { kind in
+            let wins = items(kind).filter(Self.isWin)
+            let bytes = wins.reduce(Int64(0)) { $0 + ($1.bytes ?? 0) }
+            return bytes > 0 ? (kind, bytes, wins.count) : nil
+        }
+        .sorted { $0.bytes > $1.bytes }
+    }
+
+    /// The few single items that free the most space.
+    public func biggestWins(_ n: Int = 3) -> [DiskItem] {
+        Array(items.filter(Self.isWin).sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }.prefix(n))
+    }
 }
 
 /// Finds space RamClean can recommend freeing. It only reads; removing anything is

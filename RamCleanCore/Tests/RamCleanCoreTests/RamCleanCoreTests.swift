@@ -497,3 +497,77 @@ final class AlertTests: XCTestCase {
         XCTAssertNil(AlertRecommender.disk(snap(diskUsed: 0.995), nil).action)
     }
 }
+
+final class KillLabelTests: XCTestCase {
+    var dir: URL!
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    override func setUp() {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    }
+    override func tearDown() { try? FileManager.default.removeItem(at: dir) }
+
+    func kill(_ key: String = "com.spotify.client", terminatedAfter: TimeInterval? = 5) -> KillRecord {
+        var r = KillRecord(key: key, name: "Spotify", killedAt: t0, source: "notification", memoryBytes: 1 << 30)
+        r.terminatedAt = terminatedAfter.map { t0.addingTimeInterval($0) }
+        return r
+    }
+    func at(minutes m: Double) -> Date { t0.addingTimeInterval(m * 60) }
+
+    func testQuickRelaunchIsANegativeLabel() {
+        XCTAssertEqual(KillLabeler.outcome(kill(), relaunchedAt: at(minutes: 3), now: at(minutes: 3)), .relaunched)
+        XCTAssertEqual(KillLabeler.outcome(kill(), relaunchedAt: at(minutes: 29.9), now: at(minutes: 29.9)), .relaunched)
+        XCTAssertEqual(KillLabeler.label(for: .relaunched), .keep)
+    }
+
+    func testStayingClosedForThirtyMinutesConfirmsDeadweight() {
+        XCTAssertNil(KillLabeler.outcome(kill(), relaunchedAt: nil, now: at(minutes: 29)), "still inside the window")
+        XCTAssertEqual(KillLabeler.outcome(kill(), relaunchedAt: nil, now: at(minutes: 30)), .stayedClosed)
+        // Reopening after the window is not a regret.
+        XCTAssertEqual(KillLabeler.outcome(kill(), relaunchedAt: at(minutes: 30), now: at(minutes: 30)), .stayedClosed)
+        XCTAssertEqual(KillLabeler.label(for: .stayedClosed), .deadweight)
+    }
+
+    func testAnAppThatNeverQuitTeachesNothing() {
+        let stuck = kill(terminatedAfter: nil)
+        XCTAssertNil(KillLabeler.outcome(stuck, relaunchedAt: at(minutes: 2), now: at(minutes: 2)), "can't relaunch what never quit")
+        XCTAssertEqual(KillLabeler.outcome(stuck, relaunchedAt: nil, now: at(minutes: 31)), .neverQuit)
+        XCTAssertNil(KillLabeler.label(for: .neverQuit))
+    }
+
+    func testLedgerResolvesRelaunchesAndExpiriesAndSurvivesRestart() {
+        let ledger = KillLedger(directory: dir)
+        ledger.recordKill(KillRecord(key: "a", name: "A", killedAt: t0, source: "window"))
+        ledger.recordKill(KillRecord(key: "b", name: "B", killedAt: t0, source: "window"))
+        ledger.recordKill(KillRecord(key: "c", name: "C", killedAt: t0, source: "window"))
+        XCTAssertNotNil(ledger.noteTerminated(key: "a", at: at(minutes: 0.1)))
+        XCTAssertNil(ledger.noteTerminated(key: "a", at: at(minutes: 0.2)), "announced once")
+        ledger.markForced(key: "b")
+        XCTAssertNotNil(ledger.noteTerminated(key: "b", at: at(minutes: 0.3)))
+        XCTAssertNil(ledger.noteLaunch(key: "other", at: at(minutes: 1)))
+
+        // RamClean restarts; the kills are still being followed.
+        let reloaded = KillLedger(directory: dir)
+        XCTAssertEqual(reloaded.pending.map(\.key), ["a", "b", "c"])
+        XCTAssertTrue(reloaded.pending[1].forced)
+
+        let hit = reloaded.noteLaunch(key: "a", at: at(minutes: 10))
+        XCTAssertEqual(hit?.record.key, "a")
+        XCTAssertEqual(hit?.outcome, .relaunched)
+        XCTAssertNil(reloaded.noteLaunch(key: "a", at: at(minutes: 11)), "a second launch isn't a second regret")
+        XCTAssertTrue(reloaded.expire(now: at(minutes: 20)).isEmpty)
+
+        let done = reloaded.expire(now: at(minutes: 30))
+        XCTAssertEqual(done.map(\.record.key), ["b", "c"])
+        XCTAssertEqual(done.map(\.outcome), [.stayedClosed, .neverQuit])
+        XCTAssertTrue(KillLedger(directory: dir).pending.isEmpty)
+    }
+
+    func testANewerKillOfTheSameAppRestartsTheWindow() {
+        let ledger = KillLedger(directory: dir)
+        ledger.recordKill(KillRecord(key: "a", name: "A", killedAt: t0, source: "window"))
+        ledger.recordKill(KillRecord(key: "a", name: "A", killedAt: at(minutes: 25), source: "window"))
+        ledger.noteTerminated(key: "a", at: at(minutes: 25.1))
+        XCTAssertEqual(ledger.pending.count, 1)
+        XCTAssertEqual(ledger.noteLaunch(key: "a", at: at(minutes: 50))?.outcome, .relaunched)
+    }
+}

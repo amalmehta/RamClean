@@ -27,9 +27,20 @@ private struct GeneralSettings: View {
                 ForEach([5.0, 10, 15, 30, 60, 120], id: \.self) { Text("\(Int($0)) seconds").tag($0) }
             }
             Picker("Offer Force Quit after", selection: $model.prefs.forceQuitAfterSeconds) {
-                ForEach([5.0, 8, 15, 30], id: \.self) { Text("\(Int($0)) seconds").tag($0) }
+                ForEach([5.0, 8, 10, 15, 30], id: \.self) { Text("\(Int($0)) seconds").tag($0) }
             }
             Text("RamClean asks apps to quit politely first. If one is still running after this long, it offers Force Quit (which loses unsaved work).")
+                .font(.caption).foregroundStyle(.secondary)
+            LabeledContent("Spot unsaved changes before quitting") {
+                if AXIsProcessTrusted() {
+                    Text("On").foregroundStyle(.secondary)
+                } else {
+                    Button("Allow Accessibility…") {
+                        AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+                    }
+                }
+            }
+            Text("RamClean always asks before quitting the app you're using. With Accessibility access it also asks before quitting an app with unsaved documents.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .formStyle(.grouped)

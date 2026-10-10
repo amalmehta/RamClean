@@ -6,11 +6,13 @@ import UserNotifications
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     enum Action: String {
         case quit = "QUIT", keep = "KEEP", alwaysKeep = "ALWAYS_KEEP", forceQuit = "FORCE_QUIT", open = "OPEN"
+        case relaunch = "RELAUNCH"
         case alertFix = "ALERT_FIX", alertShow = "ALERT_SHOW", alertSnooze = "ALERT_SNOOZE"
     }
 
     private static let suggestionCategory = "SUGGESTION"
     private static let forceCategory = "FORCE"
+    private static let quitDoneCategory = "QUIT_DONE"
     private static let infoCategory = "INFO"
     private static let alertFixCategory = "ALERT_WITH_FIX"
     private static let alertCategory = "ALERT"
@@ -41,6 +43,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             ], intentIdentifiers: []),
             UNNotificationCategory(identifier: Self.forceCategory, actions: [
                 UNNotificationAction(identifier: Action.forceQuit.rawValue, title: "Force Quit", options: [.destructive]),
+            ], intentIdentifiers: []),
+            UNNotificationCategory(identifier: Self.quitDoneCategory, actions: [
+                UNNotificationAction(identifier: Action.relaunch.rawValue, title: "Relaunch", options: []),
             ], intentIdentifiers: []),
             UNNotificationCategory(identifier: Self.infoCategory, actions: [], intentIdentifiers: []),
             UNNotificationCategory(identifier: Self.alertFixCategory, actions: [
@@ -74,6 +79,18 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     func offerForceQuit(key: String, name: String) {
         send(id: "force-\(key)", title: "\(name) didn't quit", body: "It may be waiting on a dialog or stuck. Force quitting loses unsaved work.",
              category: Self.forceCategory, key: key)
+    }
+
+    /// The app RamClean quit is gone; one tap brings it back if that was a mistake.
+    func quitDone(key: String, name: String, body: String) {
+        withdraw(["force-\(key)", "suggest-\(key)"])
+        send(id: "quit-done-\(key)", title: "Quit \(name)", body: body, category: Self.quitDoneCategory, key: key)
+    }
+
+    func withdraw(_ ids: [String]) {
+        let center = UNUserNotificationCenter.current()
+        center.removeDeliveredNotifications(withIdentifiers: ids)
+        center.removePendingNotificationRequests(withIdentifiers: ids)
     }
 
     /// Something RamClean tried on your behalf didn't work.

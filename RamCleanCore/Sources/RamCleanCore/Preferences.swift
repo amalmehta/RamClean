@@ -37,7 +37,7 @@ public struct Preferences: Codable, Equatable, Sendable {
     /// Projects and files touched within this many days are active work and never suggested.
     public var activeDays: Double = 30
     /// Seconds to wait after a polite quit before offering Force Quit.
-    public var forceQuitAfterSeconds: Double = 8
+    public var forceQuitAfterSeconds: Double = 10
     public var alwaysKeep: [String] = []
     /// Bundle IDs treated as work tools. A trailing "*" matches a prefix.
     public var workTools: [String] = Preferences.defaultWorkTools

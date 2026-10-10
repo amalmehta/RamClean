@@ -37,6 +37,8 @@ final class AppModel: ObservableObject {
     let dataDirectory: URL
     let habitStore: HabitStore
     let model: DeadweightModel
+    /// Apps RamClean quit, followed for 30 minutes to learn whether you wanted them back.
+    let kills: KillLedger
     let notifier = Notifier()
     /// Folder sizes remembered between disk scans (and app launches, via sizes.json), so
     /// refreshes only re-measure what changed.
@@ -53,8 +55,6 @@ final class AppModel: ObservableObject {
     private lazy var thresholds = ThresholdMonitor(prefs: prefs)
     /// The disk alert waits for a fresh scan so it can name what to clear.
     private var diskAlertWaitingForScan = false
-    /// Apps RamClean quit, and when — for force-quit follow-ups and "regret" relabelling.
-    private var quitByUs: [String: Date] = [:]
     private var observers: [NSObjectProtocol] = []
     private var started = false
 
@@ -63,6 +63,7 @@ final class AppModel: ObservableObject {
         dataDirectory = base.appendingPathComponent("RamClean", isDirectory: true)
         habitStore = HabitStore(directory: dataDirectory)
         model = DeadweightModel(directory: dataDirectory)
+        kills = KillLedger(directory: dataDirectory)
         prefs = Self.loadPrefs()
         sizeCache = SizeCache(contentsOf: dataDirectory.appendingPathComponent("sizes.json"))
         // Last disk scan, so "What to clear" opens instantly; it refreshes in the background.
@@ -117,6 +118,7 @@ final class AppModel: ObservableObject {
         habits = habitStore.habits.values.sorted { lhs, rhs in
             (habitStore.stats(for: lhs.key, now: now).avgDailyMinutes14d) > (habitStore.stats(for: rhs.key, now: now).avgDailyMinutes14d)
         }
+        for (r, outcome) in kills.expire(now: now) { resolve(r, outcome, at: now) }
         habitStore.save(now: now)
 
         let policy = SuggestionPolicy(prefs: prefs)
@@ -159,6 +161,7 @@ final class AppModel: ObservableObject {
                 guard let self else { return }
                 let key = Self.key(a)
                 self.awaitingForceQuit.remove(key)
+                if let r = self.kills.noteTerminated(key: key, at: Date()) { self.announceQuit(r) }
                 if a.activationPolicy == .regular {
                     self.habitStore.log(.terminated, key: key, name: a.localizedName ?? "", at: Date())
                     self.refreshEvents()
@@ -171,14 +174,34 @@ final class AppModel: ObservableObject {
         guard a.activationPolicy == .regular else { return }
         let key = Self.key(a), name = a.localizedName ?? key, now = Date()
         habitStore.recordLaunch(key: key, name: name, at: now)
-        // Reopened within 30 minutes of RamClean quitting it: that was the wrong call.
-        if let quitAt = quitByUs[key], now.timeIntervalSince(quitAt) < 30 * 60 {
-            quitByUs[key] = nil
-            habitStore.recordDecision(.regretRelaunch, key: key, name: name, detail: "Reopened \(Int(now.timeIntervalSince(quitAt) / 60)) min after RamClean quit it", at: now)
-            model.relabelLatest(key: key, since: quitAt.addingTimeInterval(-60), to: .keep)
+        if let hit = kills.noteLaunch(key: key, at: now) { resolve(hit.record, hit.outcome, at: now) }
+        refreshEvents()
+    }
+
+    /// A kill's 30-minute window has closed (or you reopened the app sooner): log how it
+    /// went, and if you wanted it back, flip that answer to "keep" so the model learns.
+    private func resolve(_ r: KillRecord, _ outcome: KillOutcome, at now: Date) {
+        let minutes = Int(now.timeIntervalSince(r.killedAt) / 60)
+        switch outcome {
+        case .relaunched:
+            habitStore.recordDecision(.regretRelaunch, key: r.key, name: r.name, detail: "Reopened \(minutes) min after RamClean quit it", at: now)
+        case .stayedClosed:
+            habitStore.log(.stayedClosed, key: r.key, name: r.name,
+                           detail: "Not reopened within \(Int(KillLabeler.regretWindow / 60)) min of RamClean \(r.forced ? "force quitting" : "quitting") it", at: now)
+        case .neverQuit:
+            break
+        }
+        if KillLabeler.label(for: outcome) == .keep {
+            model.relabelLatest(key: r.key, since: r.killedAt.addingTimeInterval(-60), to: .keep)
             retrain()
         }
         refreshEvents()
+    }
+
+    private func announceQuit(_ r: KillRecord) {
+        var body = r.memoryBytes.map { "Freed about \(Format.bytes($0)). " } ?? ""
+        body += "Changed your mind? Relaunch it."
+        notifier.quitDone(key: r.key, name: r.name, body: body)
     }
 
     // MARK: - Suggestions and answers
@@ -204,6 +227,7 @@ final class AppModel: ObservableObject {
         case .keep: keep(key: key, always: false, source: "notification")
         case .alwaysKeep: keep(key: key, always: true, source: "notification")
         case .forceQuit: forceQuit(key: key)
+        case .relaunch: relaunch(key: key)
         case .alertFix: applyAlertFix(info)
         case .alertShow: if let resource { showRecommendations(resource) }
         case .alertSnooze:
@@ -262,14 +286,22 @@ final class AppModel: ObservableObject {
         requestedPanel = UsagePanel(rawValue: r.rawValue)
     }
 
+    /// Asks the app to quit normally, so it can save or prompt; Force Quit is only offered
+    /// if it's still running `forceQuitAfterSeconds` later. Apps with unsaved changes, or the
+    /// one you're using, need a confirmation first.
     func quit(key: String, source: String) {
         let apps = Self.runningApps(key)
         guard !apps.isEmpty else { return }
         let name = apps[0].localizedName ?? key
+        if let risk = Self.quitRisk(apps), !confirmQuit(name: name, reason: risk) {
+            lastNotified[key] = Date()
+            return
+        }
         let now = Date()
         record(key: key, label: .deadweight, source: source)
         habitStore.recordDecision(.quitBySuggestion, key: key, name: name, detail: "from \(source)", at: now)
-        quitByUs[key] = now
+        kills.recordKill(KillRecord(key: key, name: name, killedAt: now, source: source,
+                                    memoryBytes: assessments.first { $0.group.habitKey == key }?.group.memoryBytes))
         apps.forEach { $0.terminate() }
         refreshEvents()
 
@@ -282,11 +314,63 @@ final class AppModel: ObservableObject {
 
     func forceQuit(key: String) {
         let apps = Self.runningApps(key)
+        kills.markForced(key: key)
         apps.forEach { $0.forceTerminate() }
         awaitingForceQuit.remove(key)
         if let name = apps.first?.localizedName {
             habitStore.log(.forceQuit, key: key, name: name, at: Date())
             refreshEvents()
+        }
+    }
+
+    /// Reopens an app RamClean quit, by its bundle ID (or path, for apps without one).
+    func relaunch(key: String) {
+        let name = habitStore.habits[key]?.name ?? key
+        guard let url = key.hasPrefix("/") ? URL(fileURLWithPath: key) : NSWorkspace.shared.urlForApplication(withBundleIdentifier: key) else {
+            notifier.problem("Couldn't relaunch \(name)", "RamClean can't find the app anymore.")
+            return
+        }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            guard let error else { return }
+            Task { @MainActor in self.notifier.problem("Couldn't relaunch \(name)", error.localizedDescription) }
+        }
+    }
+
+    /// Why quitting this app needs a confirmation, or nil when it can go quietly.
+    private static func quitRisk(_ apps: [NSRunningApplication]) -> String? {
+        let unsaved = apps.contains { hasUnsavedDocuments($0.processIdentifier) }
+        let front = apps.contains(where: \.isActive)
+        switch (unsaved, front) {
+        case (true, true): return "It has unsaved changes, and you're using it right now."
+        case (true, false): return "It has unsaved changes."
+        case (false, true): return "You're using it right now."
+        case (false, false): return nil
+        }
+    }
+
+    private func confirmQuit(name: String, reason: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Quit \(name)?"
+        alert.informativeText = "\(reason) RamClean will ask it to quit normally, so it can offer to save first."
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// True when any of the app's windows shows unsaved changes. Needs Accessibility access;
+    /// without it RamClean can't tell, and the app's own save prompt is the backstop.
+    static func hasUnsavedDocuments(_ pid: pid_t) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.5)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement] else { return false }
+        return windows.contains { w in
+            AXUIElementSetMessagingTimeout(w, 0.5)
+            var edited: CFTypeRef?
+            return AXUIElementCopyAttributeValue(w, kAXEditedAttribute as CFString, &edited) == .success && (edited as? Bool) == true
         }
     }
 
@@ -449,6 +533,7 @@ final class AppModel: ObservableObject {
 
     func clearHabits() {
         habitStore.clear()
+        kills.clear()
         habits = []
         events = []
     }

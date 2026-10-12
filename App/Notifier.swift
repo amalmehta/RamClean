@@ -17,6 +17,21 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private static let alertFixCategory = "ALERT_WITH_FIX"
     private static let alertCategory = "ALERT"
 
+    /// The ram picture on each kind of notification, from App/NotificationArt
+    /// (drawn by scripts/make-notification-art.swift).
+    private enum Art: String {
+        case idle = "notif-idle", stuck = "notif-stuck", quitDone = "notif-quit-done", problem = "notif-problem"
+        case memory = "notif-memory", cpu = "notif-cpu", disk = "notif-disk"
+
+        init(_ r: Resource) {
+            switch r {
+            case .memory: self = .memory
+            case .cpu: self = .cpu
+            case .disk: self = .disk
+            }
+        }
+    }
+
     /// Called with the button tapped and the notification's userInfo.
     var onAction: ((Action, [AnyHashable: Any]) -> Void)?
     @MainActor private(set) var authorized = false
@@ -69,22 +84,23 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         n.categoryIdentifier = content.action == nil ? Self.alertCategory : Self.alertFixCategory
         n.userInfo = info
         n.sound = .default
+        n.attachments = Self.attachments(Art(content.resource))
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "alert-\(content.resource.rawValue)", content: n, trigger: nil))
     }
 
     func suggest(key: String, name: String, body: String) {
-        send(id: "suggest-\(key)", title: "Quit \(name)?", body: body, category: Self.suggestionCategory, key: key)
+        send(id: "suggest-\(key)", title: "Quit \(name)?", body: body, category: Self.suggestionCategory, key: key, art: .idle)
     }
 
     func offerForceQuit(key: String, name: String) {
         send(id: "force-\(key)", title: "\(name) didn't quit", body: "It may be waiting on a dialog or stuck. Force quitting loses unsaved work.",
-             category: Self.forceCategory, key: key)
+             category: Self.forceCategory, key: key, art: .stuck)
     }
 
     /// The app RamClean quit is gone; one tap brings it back if that was a mistake.
     func quitDone(key: String, name: String, body: String) {
         withdraw(["force-\(key)", "suggest-\(key)"])
-        send(id: "quit-done-\(key)", title: "Quit \(name)", body: body, category: Self.quitDoneCategory, key: key)
+        send(id: "quit-done-\(key)", title: "Quit \(name)", body: body, category: Self.quitDoneCategory, key: key, art: .quitDone)
     }
 
     func withdraw(_ ids: [String]) {
@@ -95,22 +111,32 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// Something RamClean tried on your behalf didn't work.
     func problem(_ title: String, _ detail: String) {
-        send(id: "problem-\(UUID().uuidString)", title: title, body: detail, category: Self.infoCategory, key: "problem")
+        send(id: "problem-\(UUID().uuidString)", title: title, body: detail, category: Self.infoCategory, key: "problem", art: .problem)
     }
 
     func sendTest() {
         send(id: "test", title: "RamClean notifications work", body: "Suggestions will look like this, with Quit / Keep running / Always keep buttons.",
-             category: Self.suggestionCategory, key: "test")
+             category: Self.suggestionCategory, key: "test", art: .idle)
     }
 
-    private func send(id: String, title: String, body: String, category: String, key: String) {
+    private func send(id: String, title: String, body: String, category: String, key: String, art: Art) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.categoryIdentifier = category
         content.userInfo = ["key": key]
         content.sound = nil
+        content.attachments = Self.attachments(art)
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
+    /// The system moves an attachment's file into its own store, so each send gets a fresh copy.
+    private static func attachments(_ art: Art) -> [UNNotificationAttachment] {
+        guard let src = Bundle.main.url(forResource: art.rawValue, withExtension: "png") else { return [] }
+        let copy = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-\(art.rawValue).png")
+        guard (try? FileManager.default.copyItem(at: src, to: copy)) != nil,
+              let a = try? UNNotificationAttachment(identifier: art.rawValue, url: copy) else { return [] }
+        return [a]
     }
 
     // Show banners even while RamClean is the active app.

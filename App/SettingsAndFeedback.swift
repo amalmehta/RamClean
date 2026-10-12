@@ -27,9 +27,20 @@ private struct GeneralSettings: View {
                 ForEach([5.0, 10, 15, 30, 60, 120], id: \.self) { Text("\(Int($0)) seconds").tag($0) }
             }
             Picker("Offer Force Quit after", selection: $model.prefs.forceQuitAfterSeconds) {
-                ForEach([5.0, 8, 15, 30], id: \.self) { Text("\(Int($0)) seconds").tag($0) }
+                ForEach([5.0, 8, 10, 15, 30], id: \.self) { Text("\(Int($0)) seconds").tag($0) }
             }
             Text("RamClean asks apps to quit politely first. If one is still running after this long, it offers Force Quit (which loses unsaved work).")
+                .font(.caption).foregroundStyle(.secondary)
+            LabeledContent("Spot unsaved changes before quitting") {
+                if AXIsProcessTrusted() {
+                    Text("On").foregroundStyle(.secondary)
+                } else {
+                    Button("Allow Accessibility…") {
+                        AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+                    }
+                }
+            }
+            Text("RamClean always asks before quitting the app you're using. With Accessibility access it also asks before quitting an app with unsaved documents.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
@@ -52,8 +63,27 @@ private struct ThresholdSettings: View {
                 slider("Ask about the same app at most every", $model.prefs.cooldownHours, 1...24, 1, " h")
                 slider("At most one suggestion every", $model.prefs.minMinutesBetweenNotifications, 1...60, 1, " min")
             }
-            Section("Disk") {
-                slider("Warn when free space below", $model.prefs.diskWarningPercent, 2...30, 1, "%")
+            Section("Alerts: notify with what to quit, clear or move") {
+                Toggle("Alert when memory, CPU or disk crosses its threshold", isOn: $model.prefs.alertsEnabled)
+                slider("Memory used at least", $model.prefs.memoryAlertPercent, 50...99, 1, "%")
+                slider("CPU at least", $model.prefs.cpuAlertPercent, 50...100, 1, "%")
+                LabeledContent("…for at least") {
+                    Stepper("\(Int(model.prefs.cpuAlertMinutes)) min", value: $model.prefs.cpuAlertMinutes, in: 1...15)
+                }
+                slider("Disk used at least", $model.prefs.diskAlertUsedPercent, 80...100, 1, "%")
+                Picker("While still over, remind every", selection: $model.prefs.alertRepeatMinutes) {
+                    ForEach([15.0, 30, 60, 120, 240], id: \.self) { Text($0 < 60 ? "\(Int($0)) min" : "\(Int($0 / 60)) h").tag($0) }
+                }
+            }
+            Section("What counts as unused") {
+                LabeledContent("Not opened for") {
+                    Stepper("\(Int(model.prefs.staleDays)) days", value: $model.prefs.staleDays, in: 30...365, step: 15)
+                }
+                LabeledContent("Active work if touched within") {
+                    Stepper("\(Int(model.prefs.activeDays)) days", value: $model.prefs.activeDays, in: 7...90, step: 7)
+                }
+                Text("Apps, downloads and big files you haven't opened in that long are suggested for removal or moving off the Mac. Projects and files changed recently, and build folders being written to, are never suggested.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

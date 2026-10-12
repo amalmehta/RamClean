@@ -12,6 +12,8 @@ flowchart LR
     C -- no --> D[Deadweight score<br/>rules of thumb + Create ML model]
     D -- memory tight and score ≥ 70% --> N[Notification: Quit? Keep? Always keep?]
     N -- your answer --> L[(Habit log + training answers)]
+    A --> T{Memory ≥ 85% · CPU ≥ 97% for 2 min · Disk ≥ 99%}
+    T -- crossed --> R[Alert with what to quit, clear or move<br/>+ one-tap fix]
     L --> D
 ```
 

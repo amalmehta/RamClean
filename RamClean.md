@@ -55,6 +55,9 @@ OPEN QUESTIONS / ASSUMPTIONS:
 Asked and answered (2026-10-07):
 - Ending a process: quit politely first, then offer Force Quit if it's still running.
 - Scope: RAM + CPU per process; disk is a gauge and a low-space warning.
+- (2026-10-08) Threshold alerts: memory 85%, CPU 97% for 2 min, disk 99% used. Each alert names what to quit, clear or move and has a one-tap fix (quit the top app or trash the top rebuildable item), plus Show recommendations and Snooze 1 hour. Repeats at most hourly while over.
+- (2026-10-08) Suggest what has no use anymore: unused apps (90 days), old downloads, build folders in projects untouched for 30 days. Never active work: projects, builds and files touched in the last 30 days.
+- (2026-10-08) Moving: large files not opened in 90 days are tagged "Move off this Mac". "Move to…" lists connected external drives (asking each time) or a folder you choose; caches still go to the Trash.
 - (2026-10-08) Clicking a bar gives recommendations. Memory and CPU: a ranked quit list with reasons. Disk: rebuildable caches, large files in home, and the Trash, with Move to Trash (confirmed, recoverable) and Show in Finder. Nothing is ever deleted permanently.
 - Model: Apple Create ML classifier (boosted trees), trained on this Mac.
 - GitHub: local git only at first; (2026-10-08) pushed to a private repo, github.com/amalmehta/RamClean.
@@ -99,6 +102,11 @@ CHANGELOG:
 - 2026-10-02 — added a DELIVERABLES field after CONTEXT
 - 2026-10-02 — added meta-instruction: every project has a system design doc at docs/SYSTEM-DESIGN.md
 - 2026-10-05 — added meta-instruction: applications include a settings button or tab
+- 2026-10-09 — Disk popover opens fast and leads with "Where to win space" (totals per category and the 3 biggest single wins); lazy rows, cached per-type icons (row icons cost 1.7 s before), at most 4 redraws a second while scanning
+- 2026-10-09 — remembered sizes survive relaunches (scan after relaunch 2.8 s, was ~11 s); caches appear as soon as each is measured; tried biggest-first ordering and dropped it (no measurable gain)
+- 2026-10-09 — faster disk scans: steps run at the same time, sizes read with getattrlistbulk in parallel, unchanged folders' sizes reused on refresh (refresh 2.8 s, was 12.7 s; first scan ~15% faster)
+- 2026-10-08 — "What to clear" is fast: opens instantly with the last results and refreshes in the background; large files and projects come from Spotlight, folder sizes use fts in parallel (full scan 87 s, was over 10 min)
+- 2026-10-08 — threshold alerts for memory, CPU and disk with recommendations and a one-tap fix; stale-item suggestions (unused apps, old downloads, old project build folders) that never touch active work; Move to… an external drive or folder
 - 2026-10-08 — pushed to GitHub as a private repo: https://github.com/amalmehta/RamClean
 - 2026-10-08 — new custom icon: a friendly ram with curled golden horns and sparkles (picked from three concepts)
 - 2026-10-08 — the Memory, CPU and Disk bars open recommendations: what to quit (with reasons) and what to clear (caches, large files, Trash) with Move to Trash

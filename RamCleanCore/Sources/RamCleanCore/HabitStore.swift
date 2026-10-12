@@ -32,7 +32,7 @@ public struct HabitStats: Equatable, Sendable {
 }
 
 public enum HabitEventKind: String, Codable, Sendable {
-    case activated, launched, terminated, suggested, quitBySuggestion, kept, alwaysKept, forceQuit, regretRelaunch, diskWarning, movedToTrash
+    case activated, launched, terminated, suggested, quitBySuggestion, kept, alwaysKept, forceQuit, regretRelaunch, stayedClosed, diskWarning, movedToTrash, movedOffMac, thresholdAlert
 }
 
 public struct HabitEvent: Codable, Equatable, Sendable, Identifiable {
@@ -191,6 +191,6 @@ public final class HabitStore {
         recentEvents = lines.suffix(Self.maxRecent).compactMap { try? Self.decoder.decode(HabitEvent.self, from: Data($0)) }
     }
 
-    static let encoder: JSONEncoder = { let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; return e }()
-    static let decoder: JSONDecoder = { let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return d }()
+    public static let encoder: JSONEncoder = { let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; return e }()
+    public static let decoder: JSONDecoder = { let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return d }()
 }

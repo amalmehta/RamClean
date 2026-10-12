@@ -18,10 +18,17 @@ final class AppModel: ObservableObject {
     @Published private(set) var isTraining = false
     @Published private(set) var diskReport: DiskReport?
     @Published private(set) var diskScanStep: String?
+    /// Paths being moved off the Mac right now.
+    @Published private(set) var movingPaths: Set<String> = []
+    /// Set by "Show recommendations" on an alert; the Overview opens that bar's list.
+    @Published var requestedPanel: UsagePanel?
+    /// Opens the main window; provided by a SwiftUI view that has `openWindow`.
+    var openMainWindow: (() -> Void)?
     @Published var prefs: Preferences {
         didSet {
             guard prefs != oldValue else { return }
             Self.savePrefs(prefs)
+            thresholds.prefs = prefs
             if prefs.checkInterval != oldValue.checkInterval { scheduleTimer() }
             tick()
         }
@@ -30,7 +37,12 @@ final class AppModel: ObservableObject {
     let dataDirectory: URL
     let habitStore: HabitStore
     let model: DeadweightModel
+    /// Apps RamClean quit, followed for 30 minutes to learn whether you wanted them back.
+    let kills: KillLedger
     let notifier = Notifier()
+    /// Folder sizes remembered between disk scans (and app launches, via sizes.json), so
+    /// refreshes only re-measure what changed.
+    let sizeCache: SizeCache
 
     private let processSampler = ProcessSampler()
     private let systemSampler = SystemSampler()
@@ -40,9 +52,9 @@ final class AppModel: ObservableObject {
     private var lastCredit = Date()
     private var lastNotified: [String: Date] = [:]
     private var lastAnyNotification: Date?
-    private var lastDiskWarning: Date?
-    /// Apps RamClean quit, and when — for force-quit follow-ups and "regret" relabelling.
-    private var quitByUs: [String: Date] = [:]
+    private lazy var thresholds = ThresholdMonitor(prefs: prefs)
+    /// The disk alert waits for a fresh scan so it can name what to clear.
+    private var diskAlertWaitingForScan = false
     private var observers: [NSObjectProtocol] = []
     private var started = false
 
@@ -51,7 +63,14 @@ final class AppModel: ObservableObject {
         dataDirectory = base.appendingPathComponent("RamClean", isDirectory: true)
         habitStore = HabitStore(directory: dataDirectory)
         model = DeadweightModel(directory: dataDirectory)
+        kills = KillLedger(directory: dataDirectory)
         prefs = Self.loadPrefs()
+        sizeCache = SizeCache(contentsOf: dataDirectory.appendingPathComponent("sizes.json"))
+        // Last disk scan, so "What to clear" opens instantly; it refreshes in the background.
+        if let data = try? Data(contentsOf: dataDirectory.appendingPathComponent("disk-report.json")),
+           let saved = try? HabitStore.decoder.decode(DiskReport.self, from: data) {
+            diskReport = saved
+        }
         modelStatus = model.status
         events = habitStore.recentEvents
     }
@@ -59,7 +78,7 @@ final class AppModel: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
-        notifier.onAction = { [weak self] action, key in self?.handle(action, key: key) }
+        notifier.onAction = { [weak self] action, info in self?.handle(action, info: info) }
         notifier.setUp()
         observeWorkspace()
         if let app = NSWorkspace.shared.frontmostApplication { frontmost = (Self.key(app), app.localizedName ?? "") }
@@ -99,6 +118,7 @@ final class AppModel: ObservableObject {
         habits = habitStore.habits.values.sorted { lhs, rhs in
             (habitStore.stats(for: lhs.key, now: now).avgDailyMinutes14d) > (habitStore.stats(for: rhs.key, now: now).avgDailyMinutes14d)
         }
+        for (r, outcome) in kills.expire(now: now) { resolve(r, outcome, at: now) }
         habitStore.save(now: now)
 
         let policy = SuggestionPolicy(prefs: prefs)
@@ -106,7 +126,7 @@ final class AppModel: ObservableObject {
                                   lastAnyNotification: lastAnyNotification, now: now) {
             suggest(pick, system: snapshot, now: now)
         }
-        checkDisk(snapshot, now: now)
+        checkThresholds(snapshot, result, now: now)
     }
 
     /// Credits the frontmost app with the time since the last tick — but only while
@@ -141,6 +161,7 @@ final class AppModel: ObservableObject {
                 guard let self else { return }
                 let key = Self.key(a)
                 self.awaitingForceQuit.remove(key)
+                if let r = self.kills.noteTerminated(key: key, at: Date()) { self.announceQuit(r) }
                 if a.activationPolicy == .regular {
                     self.habitStore.log(.terminated, key: key, name: a.localizedName ?? "", at: Date())
                     self.refreshEvents()
@@ -153,14 +174,34 @@ final class AppModel: ObservableObject {
         guard a.activationPolicy == .regular else { return }
         let key = Self.key(a), name = a.localizedName ?? key, now = Date()
         habitStore.recordLaunch(key: key, name: name, at: now)
-        // Reopened within 30 minutes of RamClean quitting it: that was the wrong call.
-        if let quitAt = quitByUs[key], now.timeIntervalSince(quitAt) < 30 * 60 {
-            quitByUs[key] = nil
-            habitStore.recordDecision(.regretRelaunch, key: key, name: name, detail: "Reopened \(Int(now.timeIntervalSince(quitAt) / 60)) min after RamClean quit it", at: now)
-            model.relabelLatest(key: key, since: quitAt.addingTimeInterval(-60), to: .keep)
+        if let hit = kills.noteLaunch(key: key, at: now) { resolve(hit.record, hit.outcome, at: now) }
+        refreshEvents()
+    }
+
+    /// A kill's 30-minute window has closed (or you reopened the app sooner): log how it
+    /// went, and if you wanted it back, flip that answer to "keep" so the model learns.
+    private func resolve(_ r: KillRecord, _ outcome: KillOutcome, at now: Date) {
+        let minutes = Int(now.timeIntervalSince(r.killedAt) / 60)
+        switch outcome {
+        case .relaunched:
+            habitStore.recordDecision(.regretRelaunch, key: r.key, name: r.name, detail: "Reopened \(minutes) min after RamClean quit it", at: now)
+        case .stayedClosed:
+            habitStore.log(.stayedClosed, key: r.key, name: r.name,
+                           detail: "Not reopened within \(Int(KillLabeler.regretWindow / 60)) min of RamClean \(r.forced ? "force quitting" : "quitting") it", at: now)
+        case .neverQuit:
+            break
+        }
+        if KillLabeler.label(for: outcome) == .keep {
+            model.relabelLatest(key: r.key, since: r.killedAt.addingTimeInterval(-60), to: .keep)
             retrain()
         }
         refreshEvents()
+    }
+
+    private func announceQuit(_ r: KillRecord) {
+        var body = r.memoryBytes.map { "Freed about \(Format.bytes($0)). " } ?? ""
+        body += "Changed your mind? Relaunch it."
+        notifier.quitDone(key: r.key, name: r.name, body: body)
     }
 
     // MARK: - Suggestions and answers
@@ -178,24 +219,89 @@ final class AppModel: ObservableObject {
         refreshEvents()
     }
 
-    func handle(_ action: Notifier.Action, key: String) {
+    func handle(_ action: Notifier.Action, info: [AnyHashable: Any]) {
+        let key = info["key"] as? String ?? ""
+        let resource = (info["resource"] as? String).flatMap(Resource.init(rawValue:))
         switch action {
         case .quit: quit(key: key, source: "notification")
         case .keep: keep(key: key, always: false, source: "notification")
         case .alwaysKeep: keep(key: key, always: true, source: "notification")
         case .forceQuit: forceQuit(key: key)
-        case .open: NSApp.activate(ignoringOtherApps: true)
+        case .relaunch: relaunch(key: key)
+        case .alertFix: applyAlertFix(info)
+        case .alertShow: if let resource { showRecommendations(resource) }
+        case .alertSnooze:
+            if let resource {
+                thresholds.snooze(resource, until: Date().addingTimeInterval(3600))
+                habitStore.log(.thresholdAlert, key: resource.rawValue, name: resource.title, detail: "snoozed for an hour", at: Date())
+                refreshEvents()
+            }
+        case .open:
+            if let resource { showRecommendations(resource) } else { NSApp.activate(ignoringOtherApps: true) }
         }
     }
 
+    // MARK: - Threshold alerts
+
+    private func checkThresholds(_ s: SystemSnapshot, _ list: [Assessment], now: Date) {
+        for r in thresholds.update(s, now: now) {
+            switch r {
+            case .memory: sendAlert(AlertRecommender.memory(s, list))
+            case .cpu: sendAlert(AlertRecommender.cpu(s, list))
+            case .disk:
+                // Use a scan from the last 6 hours, or run one and alert when it's done.
+                if let report = diskReport, diskScanStep == nil, now.timeIntervalSince(report.scannedAt) < 6 * 3600 {
+                    sendAlert(AlertRecommender.disk(s, report))
+                } else {
+                    diskAlertWaitingForScan = true
+                    scanDisk(byUser: false)
+                }
+            }
+        }
+    }
+
+    private func sendAlert(_ content: AlertContent) {
+        notifier.alert(content)
+        lastAnyNotification = Date()
+        habitStore.log(.thresholdAlert, key: content.resource.rawValue, name: content.title, detail: content.body, at: Date())
+        refreshEvents()
+    }
+
+    /// The one-tap fix from an alert: quit the top app, or trash the biggest rebuildable cache.
+    private func applyAlertFix(_ info: [AnyHashable: Any]) {
+        guard let kind = (info["fixKind"] as? String).flatMap(AlertAction.Kind.init(rawValue:)),
+              let target = info["fixTarget"] as? String else { return }
+        switch kind {
+        case .quit: quit(key: target, source: "alert")
+        case .trash:
+            let item = diskReport?.items.first { $0.path == target }
+                ?? DiskItem(name: (target as NSString).lastPathComponent, path: target, bytes: nil, kind: .cache, reason: "")
+            if let error = moveToTrash(item) { notifier.problem("Couldn't move \(item.name) to the Trash", error) }
+        }
+    }
+
+    func showRecommendations(_ r: Resource) {
+        openMainWindow?()
+        NSApp.activate(ignoringOtherApps: true)
+        requestedPanel = UsagePanel(rawValue: r.rawValue)
+    }
+
+    /// Asks the app to quit normally, so it can save or prompt; Force Quit is only offered
+    /// if it's still running `forceQuitAfterSeconds` later. Apps with unsaved changes, or the
+    /// one you're using, need a confirmation first.
     func quit(key: String, source: String) {
         let apps = Self.runningApps(key)
         guard !apps.isEmpty else { return }
         let name = apps[0].localizedName ?? key
+        if let risk = Self.quitRisk(apps), !confirmQuit(name: name, reason: risk) {
+            lastNotified[key] = Date()
+            return
+        }
         let now = Date()
         record(key: key, label: .deadweight, source: source)
         habitStore.recordDecision(.quitBySuggestion, key: key, name: name, detail: "from \(source)", at: now)
-        quitByUs[key] = now
+        kills.recordKill(KillRecord(key: key, name: name, killedAt: now, source: source,
+                                    memoryBytes: assessments.first { $0.group.habitKey == key }?.group.memoryBytes))
         apps.forEach { $0.terminate() }
         refreshEvents()
 
@@ -208,11 +314,63 @@ final class AppModel: ObservableObject {
 
     func forceQuit(key: String) {
         let apps = Self.runningApps(key)
+        kills.markForced(key: key)
         apps.forEach { $0.forceTerminate() }
         awaitingForceQuit.remove(key)
         if let name = apps.first?.localizedName {
             habitStore.log(.forceQuit, key: key, name: name, at: Date())
             refreshEvents()
+        }
+    }
+
+    /// Reopens an app RamClean quit, by its bundle ID (or path, for apps without one).
+    func relaunch(key: String) {
+        let name = habitStore.habits[key]?.name ?? key
+        guard let url = key.hasPrefix("/") ? URL(fileURLWithPath: key) : NSWorkspace.shared.urlForApplication(withBundleIdentifier: key) else {
+            notifier.problem("Couldn't relaunch \(name)", "RamClean can't find the app anymore.")
+            return
+        }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            guard let error else { return }
+            Task { @MainActor in self.notifier.problem("Couldn't relaunch \(name)", error.localizedDescription) }
+        }
+    }
+
+    /// Why quitting this app needs a confirmation, or nil when it can go quietly.
+    private static func quitRisk(_ apps: [NSRunningApplication]) -> String? {
+        let unsaved = apps.contains { hasUnsavedDocuments($0.processIdentifier) }
+        let front = apps.contains(where: \.isActive)
+        switch (unsaved, front) {
+        case (true, true): return "It has unsaved changes, and you're using it right now."
+        case (true, false): return "It has unsaved changes."
+        case (false, true): return "You're using it right now."
+        case (false, false): return nil
+        }
+    }
+
+    private func confirmQuit(name: String, reason: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Quit \(name)?"
+        alert.informativeText = "\(reason) RamClean will ask it to quit normally, so it can offer to save first."
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// True when any of the app's windows shows unsaved changes. Needs Accessibility access;
+    /// without it RamClean can't tell, and the app's own save prompt is the backstop.
+    static func hasUnsavedDocuments(_ pid: pid_t) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.5)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement] else { return false }
+        return windows.contains { w in
+            AXUIElementSetMessagingTimeout(w, 0.5)
+            var edited: CFTypeRef?
+            return AXUIElementCopyAttributeValue(w, kAXEditedAttribute as CFString, &edited) == .success && (edited as? Bool) == true
         }
     }
 
@@ -247,20 +405,51 @@ final class AppModel: ObservableObject {
     // MARK: - Disk
 
     /// Scans in the background; the UI shows `diskScanStep` until it's done.
-    func scanDisk() {
+    /// `byUser` is true when you opened the Disk list or pressed Rescan: only then may the scan
+    /// read Desktop, Documents and Downloads for the first time, since that can raise a macOS
+    /// permission prompt that would otherwise stall a background scan until someone answers it.
+    /// `fresh` (the Rescan button) measures every folder again instead of reusing remembered sizes.
+    func scanDisk(byUser: Bool = true, fresh: Bool = false) {
         guard diskScanStep == nil else { return }
+        sizeCache.reuse = !fresh
         diskScanStep = "starting"
+        let askedKey = "RamCleanScannedProtectedFolders"
+        var scanner = DiskScanner()
+        scanner.avoidProtectedFolders = !byUser && !UserDefaults.standard.bool(forKey: askedKey)
+        scanner.sizeCache = sizeCache
+        scanner.staleDays = prefs.staleDays
+        scanner.activeDays = prefs.activeDays
+        let keep = prefs
+        scanner.isKept = { keep.matches(keep.alwaysKeep + keep.workTools, $0) }
+        scanner.runningAppPaths = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.path })
+        // With earlier results on screen, keep showing them until the new scan is done;
+        // on a first scan, show results as they arrive.
+        let firstScan = diskReport == nil
+        // Results stream in per folder; redraw at most 4 times a second so the list stays smooth.
+        let lastPublish = NSLock()
+        var publishedAt = Date.distantPast
         DispatchQueue.global(qos: .utility).async {
-            let report = DiskScanner().scan(progress: { step, found in
+            let report = scanner.scan(progress: { step, found in
+                lastPublish.lock()
+                let due = Date().timeIntervalSince(publishedAt) >= 0.25
+                if due { publishedAt = Date() }
+                lastPublish.unlock()
+                guard due else { return }
                 let partial = DiskReport(items: found.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }, scannedAt: Date())
                 DispatchQueue.main.async {
                     self.diskScanStep = step
-                    if !found.isEmpty { self.diskReport = partial }
+                    if firstScan && !found.isEmpty { self.diskReport = partial }
                 }
             })
             DispatchQueue.main.async {
+                if byUser { UserDefaults.standard.set(true, forKey: askedKey) }
                 self.diskReport = report
+                self.saveDiskReport()
                 self.diskScanStep = nil
+                if self.diskAlertWaitingForScan, let s = self.system {
+                    self.diskAlertWaitingForScan = false
+                    self.sendAlert(AlertRecommender.disk(s, report))
+                }
             }
         }
     }
@@ -277,9 +466,64 @@ final class AppModel: ObservableObject {
                        detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) · \(item.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))",
                        at: Date())
         diskReport?.items.removeAll { $0.id == item.id }
+        saveDiskReport()
         refreshEvents()
         tick()
         return nil
+    }
+
+    private func saveDiskReport() {
+        guard let r = diskReport, let data = try? HabitStore.encoder.encode(r) else { return }
+        try? data.write(to: dataDirectory.appendingPathComponent("disk-report.json"), options: .atomic)
+        sizeCache.save(to: dataDirectory.appendingPathComponent("sizes.json"))
+    }
+
+    /// Drives you can move big files to (external and network volumes, not this Mac's own disk).
+    static func externalVolumes() -> [(name: String, url: URL, free: Int64)] {
+        let keys: [URLResourceKey] = [.volumeNameKey, .volumeIsInternalKey, .volumeIsRootFileSystemKey, .volumeIsBrowsableKey,
+                                      .volumeIsReadOnlyKey, .volumeAvailableCapacityKey]
+        let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
+        return urls.compactMap { url in
+            guard let v = try? url.resourceValues(forKeys: Set(keys)), v.volumeIsRootFileSystem != true,
+                  v.volumeIsInternal != true, v.volumeIsBrowsable != false, v.volumeIsReadOnly != true else { return nil }
+            return (v.volumeName ?? url.lastPathComponent, url, Int64(v.volumeAvailableCapacity ?? 0))
+        }
+    }
+
+    /// Moves a file off this Mac into `folder` (e.g. an external drive). It's copied, then
+    /// removed here only once the copy succeeded. Calls back on the main thread with an error message or nil.
+    func move(_ item: DiskItem, to folder: URL, done: @escaping (String?) -> Void) {
+        let source = URL(fileURLWithPath: item.path)
+        let free = (try? folder.resourceValues(forKeys: [.volumeAvailableCapacityKey]).volumeAvailableCapacity).flatMap { $0 }
+        if let free, let size = item.bytes, Int64(free) < size + 100 * 1_048_576 {
+            done("\(folder.lastPathComponent) only has \(Format.bytes(UInt64(free))) free; \(item.name) needs \(Format.bytes(UInt64(size))).")
+            return
+        }
+        var dest = folder.appendingPathComponent(source.lastPathComponent)
+        var n = 2
+        while FileManager.default.fileExists(atPath: dest.path) {
+            let base = source.deletingPathExtension().lastPathComponent, ext = source.pathExtension
+            dest = folder.appendingPathComponent(ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
+            n += 1
+        }
+        movingPaths.insert(item.path)
+        let target = dest
+        DispatchQueue.global(qos: .userInitiated).async {
+            var failure: String?
+            do { try FileManager.default.moveItem(at: source, to: target) } catch { failure = error.localizedDescription }
+            DispatchQueue.main.async {
+                self.movingPaths.remove(item.path)
+                if failure == nil {
+                    self.habitStore.log(.movedOffMac, key: "disk", name: item.name,
+                                        detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) → \(target.path)", at: Date())
+                    self.diskReport?.items.removeAll { $0.id == item.id }
+                    self.saveDiskReport()
+                    self.refreshEvents()
+                    self.tick()
+                }
+                done(failure)
+            }
+        }
     }
 
     func resetModel() {
@@ -289,17 +533,9 @@ final class AppModel: ObservableObject {
 
     func clearHabits() {
         habitStore.clear()
+        kills.clear()
         habits = []
         events = []
-    }
-
-    private func checkDisk(_ s: SystemSnapshot, now: Date) {
-        guard prefs.notificationsEnabled, s.diskFreeFraction * 100 < prefs.diskWarningPercent else { return }
-        if let last = lastDiskWarning, now.timeIntervalSince(last) < 24 * 3600 { return }
-        lastDiskWarning = now
-        notifier.diskWarning(free: Format.bytes(UInt64(max(0, s.diskFree))), percent: Int(s.diskFreeFraction * 100))
-        habitStore.log(.diskWarning, key: "disk", name: "Disk", detail: "\(Format.bytes(UInt64(max(0, s.diskFree)))) free", at: now)
-        refreshEvents()
     }
 
     private func refreshEvents() { events = habitStore.recentEvents }

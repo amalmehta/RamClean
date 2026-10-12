@@ -21,7 +21,8 @@ flowchart TB
         FV["FeatureVector + HeuristicScorer"]
         DM["DeadweightModel<br/>Create ML boosted trees · training.jsonl"]
         AS["Assessor + SuggestionPolicy + CPUHistory"]
-        DS["DiskScanner<br/>caches · large files · Trash"]
+        DS["DiskScanner<br/>caches · stale builds · unused apps ·<br/>old downloads · large files · Trash"]
+        TM["ThresholdMonitor + AlertRecommender"]
     end
     AM --> PS & SS & AA
     PS --> GR --> AS
@@ -33,7 +34,9 @@ flowchart TB
     NT -- "Quit / Keep / Always keep / Force Quit" --> AM
     AM -- answers --> DM & HS
     UI <--> AM
-    AM -- "Disk bar clicked" --> DS
+    AM -- "every sample" --> TM
+    TM -- "alert: what to quit / clear / move" --> NT
+    AM -- "Disk bar clicked or disk alert" --> DS
     DS -- "items found so far" --> AM
     NSW["NSWorkspace<br/>activate · launch · terminate"] --> AM
 ```
@@ -55,6 +58,11 @@ flowchart TB
 | `SuggestionPolicy` | Decides whether to notify now, and about which app (the largest memory × score that passes the thresholds and cooldowns). |
 | `CPUHistory` | Rolling average over the last 12 samples, so a single spike doesn't count as "busy". |
 | `DiskScanner` | Read-only scan for space you could free. It measures a fixed list of rebuildable developer and tool caches, every child of `~/Library/Caches` and `~/.cache` over 200 MB, files of 1 GB or more in your home folder (skipping `~/Library`, hidden folders, inside app bundles, and anything already listed), and the Trash. Each item gets a reason, an optional caution, and a "can trash" flag. It reports items as each step finishes. |
+| `DiskScanner` (stale and active rules) | Also finds build and dependency folders in code projects (found by marker files like `package.json` or `Cargo.toml`) with no changes for `activeDays` (30), apps in `/Applications` not opened in `staleDays` (90) by Spotlight's `kMDItemLastUsedDate`, and old big things in `~/Downloads`. Anything touched within `activeDays` counts as live work and is skipped: projects, build folders written to recently, and files opened or changed recently. Large files not opened in `staleDays` are tagged to move off the Mac. |
+| Scan speed | Large files and code projects come from **Spotlight** (`MDQuery`: `kMDItemFSSize ≥ 1 GB`, and project marker file names), so the home folder isn't walked; if Spotlight can't answer (indexing off), it falls back to walking. **Independent steps run at the same time** (caches, unused apps, old downloads, Trash and the Spotlight queries), and only large files and build folders wait for them. Folder sizes use **`getattrlistbulk`**, one call per batch of directory entries, with the first two levels of subfolders measured in parallel; it falls back to fts. **`SizeCache`** remembers each folder's size and modification time, so refreshes re-measure only what changed (for up to 6 hours; Rescan measures everything). It's saved to `sizes.json`, so a relaunch or reboot doesn't start from zero. Each cache appears in the list as soon as it's measured. The app keeps the last report in `disk-report.json`. |
+| Disk popover | Starts with `DiskReport.totals` (space you could win per category, counting only actionable items) and `biggestWins()` (top 3 single items). Rows are in a `LazyVStack`, so only visible ones are built. Icons come from `DiskIcons`, one per file type (cached), with real icons only for apps and the Trash. While a scan streams in, the list redraws at most 4 times a second. |
+| `ThresholdMonitor` | Watches memory %, CPU % and disk % used against your thresholds (85 / 97 / 99). CPU must stay over for 2 minutes. It reminds at most every 60 minutes while over, re-arms after dropping 3 points below the line, and supports per-resource snooze. |
+| `AlertRecommender` | Writes each alert's title and text and picks its one-tap fix. Memory and CPU: idle unprotected apps (deadweight first), else the busiest app and why it's protected. Disk: the biggest rebuildable items, unused apps, and files to move. The fix is quitting the top app or trashing the biggest rebuildable item. |
 | `Assessment.reasons` | Short "why" phrases for the recommendation lists: protection reason, idle time, daily use, CPU, and your past answers. |
 | `AppModel` | Runs the timer, credits foreground time, observes app launch, quit and activation, quits apps (`terminate`, then optionally `forceTerminate`), records answers, retrains the model in the background, and publishes state to SwiftUI. |
 | `Notifier` | Notification categories with action buttons; routes taps back to `AppModel`. |
@@ -75,6 +83,12 @@ flowchart TB
 - **Keep / Always keep:** records a `keep` example. "Always keep" also adds the app to the list.
 - **Regret:** if an app RamClean quit is opened again within 30 minutes, its latest example is relabelled `keep`.
 - After every answer the model retrains on a background queue; it takes about a second.
+
+**Threshold alerts:** every check feeds the system numbers into `ThresholdMonitor`. For each resource it reports, `AlertRecommender` writes the notification.
+
+The disk alert uses a scan from the last 6 hours, or starts one and sends the alert when it finishes. The notification's fix button is re-registered with its current label ("Quit Spotify") just before sending. Tapping it quits the app (polite first) or trashes the cache. **Show recommendations** opens the window on that bar's popover; **Snooze** silences the resource for an hour.
+
+**Move to…:** for large files and old downloads. It lists external, writable, browsable volumes plus a folder picker, checks the destination has room, then calls `FileManager.moveItem`. Across drives that's a copy followed by removing the original, so a failed copy leaves the original where it was. The move is logged as `movedOffMac`.
 
 **Recommendations (clicking a bar):** Memory and CPU show Dock apps ranked by that resource with their verdict, reasons, and Quit / Keep buttons; those buttons feed the model exactly like notification answers do. Disk runs `DiskScanner` on a background queue, and its results stream into the popover. **Move to Trash** asks first, then calls `FileManager.trashItem` (recoverable), logs a `movedToTrash` event and refreshes.
 
@@ -100,12 +114,29 @@ The model trains only once there are at least 8 answers, with at least 3 quits a
 - **Stable row order.** Rows re-sort at most once a minute and never under the pointer. Found in testing: re-sorting between aiming and clicking made a click hit a neighbouring app.
 - **Regular app with a Dock icon, plus a menu bar item.** This makes ⌘, and the main window behave normally. A menu-bar-only (`LSUIElement`) build would be a small change.
 - **Disk: Move to Trash only.** Nothing is deleted permanently, and every move is confirmed and logged. Only rebuildable caches are labelled safe; large files are listed with what they look like, and you decide. Simulator devices are advice only, because trashing their folder behind `simctl`'s back corrupts Xcode's device list.
+- **Active work is off-limits by recency, not guesswork.** A project, build folder or file touched in the last 30 days is never suggested, so a project being built or a document you're editing never shows up. The trade-off: a project paused for 29 days isn't flagged yet.
+- **Unused apps rely on Spotlight's last-used date.** Apps with no record are left alone rather than guessed at, and Apple apps are never listed.
+- **One-tap fixes stay recoverable.** A notification can quit an app (politely) or trash a *rebuildable* item. Uninstalling apps, trashing downloads and moving files always happen in the window, with a confirmation.
+- **Spotlight first for the home folder.** Walking a home folder on a busy Mac took over 10 minutes; Spotlight answers the same questions in seconds, and also finds big bundles (VMs, Final Cut libraries) the walk skipped. The trade-off: folders Spotlight doesn't index (excluded in System Settings, or external) aren't searched unless Spotlight is off entirely.
+- **Stale-while-refreshing.** The popover always opens with the last results and refreshes in the background when they're over 30 minutes old, keeping the old list on screen until the new one is complete. Measured on this Mac (24 GB of caches, about 200 results):
+
+  | Version | Cold first scan | Warm first scan | Refresh |
+  |---|---|---|---|
+  | Walking the home folder | over 10 min | | |
+  | Spotlight + fts | 37 s | 12.7 s | 12.7 s |
+  | Concurrent steps + getattrlistbulk + SizeCache | 37 s | 10.8 s | 2.8 s |
+  | + sizes saved across launches, results streamed | 37 s | 11.4 s (caches appear from the start) | 2.8–3.1 s, **also right after a relaunch** (was ~11.4 s) |
+
+  Tried and dropped: measuring folders biggest-first by their last known size. Alternating runs showed no difference (5.46 s vs 5.61 s, within noise), because big folders are already split across threads.
+
+  A cold scan is bound by disk reads, so parallelism barely helps there; the size memory is what makes refreshes and alert-triggered scans fast.
+- **A responsive Disk popover.** Measured: looking up each row's own file icon took 1.7 s on the main thread for 181 rows, and was repeated (0.15 s) on every redraw; cached per-type icons take 3 ms. Together with lazy rows and throttled redraws, the popover opens in well under a second.
 - **Disk scan on demand.** The scan reads a lot of files, so it runs only when you open the Disk popover or press Rescan, never on the timer.
 - **Ad-hoc signed, no sandbox.** Reading other apps' processes isn't possible from the App Sandbox. Distribution would need Developer ID signing and notarization.
 
 ## Testing
 
-- `RamCleanCore/Tests`: 19 XCTest cases covering the disk scanner on a fake home folder (caches, thresholds, `~/Library` skipped, no duplicates, Trash), cache naming, durations, reason text,  grouping, protection rules, the habit log and its persistence, the heuristic, Create ML training and prediction (held-out accuracy, unseen apps, regret relabel), the notification policy, CPU averaging, preference decoding, and a live sampler smoke test.
+- `RamCleanCore/Tests`: 22 XCTest cases covering threshold alerts (memory crossing, hourly repeat, recovery re-arm, CPU sustain and reset, snooze, off switch), alert recommendation text and fixes, stale projects, unused apps and old downloads versus active work (fresh projects, builds in progress, recently opened files), the disk scanner on a fake home folder (caches, thresholds, `~/Library` skipped, no duplicates, Trash), cache naming, durations, reason text,  grouping, protection rules, the habit log and its persistence, the heuristic, Create ML training and prediction (held-out accuracy, unseen apps, regret relabel), the notification policy, CPU averaging, preference decoding, and a live sampler smoke test.
 - Manual end-to-end test on this Mac (macOS 26.6, Intel, 32 GB): live grouping and verdicts were checked, and quitting from the window was exercised. That covered the log event, the training example, terminate, and relaunch → regret relabel to `keep`. Screenshots in `docs/images` are from that run.
 - Not automatically tested: the SwiftUI views, notification button taps, and Force Quit follow-ups.
 
@@ -115,8 +146,12 @@ The model trains only once there are at least 8 answers, with at least 3 quits a
 - Footprint memory double-counts nothing, but shared memory isn't split. An app's number is what quitting it roughly frees, not an exact figure.
 - "Playing audio" depends on Core Audio's process list. Apps that play audio through a separate system process might not be detected.
 - Idle detection uses system-wide input, so time in front is credited while you're at the Mac even if you're only reading.
+- The notification's fix-button label is shared by all alert notifications, so if two alerts with fixes are on screen, the older one's button shows the newer label. Tapping it still acts on its own app or cache.
+- Folders named `build`, `dist` or `target` aren't searched for large files, even outside code projects.
+- An app's leftover data in `~/Library` isn't removed when you uninstall it from RamClean.
 - Measuring the Trash needs Full Disk Access, which RamClean doesn't ask for, so its size may show as "unknown".
-- The large-file scan walks your whole home folder (outside `~/Library`), which can take a minute or more on a full drive. Files inside `~/Library` (e.g. Mail, Messages attachments, Docker disk images) aren't listed except through the cache rules.
+- Sizing big cache and `node_modules` folders still means touching every file in them, so a cold first scan takes around 40 s (longer on a busy Mac); the saved report hides that wait.
+- Remembered sizes notice changes only directly inside each measured folder; a cache that grows deep inside shows its new size within 6 hours or on Rescan. Files inside `~/Library` (e.g. Mail, Messages attachments, Docker disk images) aren't listed except through the cache rules.
 - Moving a cache folder for a running app to the Trash is usually fine, but the app may recreate it immediately.
 - Notifications need the app to stay running (it keeps running in the menu bar when the window is closed). There's no launch-at-login yet.
 - Feedback is saved locally only; there's no place to send it yet.

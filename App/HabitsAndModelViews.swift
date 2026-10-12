@@ -71,8 +71,11 @@ struct ActivityView: View {
         case .alwaysKept: return "Always keep:"
         case .forceQuit: return "Force quit"
         case .regretRelaunch: return "You reopened"
+        case .stayedClosed: return "Stayed closed:"
         case .diskWarning: return "Low space:"
         case .movedToTrash: return "Moved to Trash:"
+        case .movedOffMac: return "Moved off this Mac:"
+        case .thresholdAlert: return "Alert:"
         }
     }
     private func symbol(_ k: HabitEventKind) -> String {
@@ -83,16 +86,19 @@ struct ActivityView: View {
         case .quitBySuggestion, .forceQuit: return "moon.zzz.fill"
         case .kept, .alwaysKept: return "hand.thumbsup.fill"
         case .regretRelaunch: return "arrow.uturn.backward"
+        case .stayedClosed: return "checkmark.circle"
         case .activated: return "macwindow"
         case .diskWarning: return "internaldrive"
         case .movedToTrash: return "trash"
+        case .movedOffMac: return "externaldrive"
+        case .thresholdAlert: return "exclamationmark.triangle"
         }
     }
     private func color(_ k: HabitEventKind) -> Color {
         switch k {
         case .quitBySuggestion, .forceQuit, .suggested: return .orange
         case .kept, .alwaysKept: return .green
-        case .regretRelaunch, .diskWarning: return .red
+        case .regretRelaunch, .diskWarning, .thresholdAlert: return .red
         default: return .secondary
         }
     }

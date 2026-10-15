@@ -24,7 +24,9 @@ struct MenuBarView: View {
                     }
                     Spacer()
                     Text(Format.bytes(a.group.memoryBytes)).font(.caption).monospacedDigit()
-                    if a.isSuggestable {
+                    if model.quitting.contains(a.group.habitKey) {
+                        QuittingLabel()
+                    } else if a.isSuggestable {
                         Button("Quit") { model.quit(key: a.group.habitKey, source: "menu bar") }.controlSize(.small)
                             .accessibilityLabel("Quit \(a.group.name)")
                     }

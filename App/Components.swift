@@ -94,3 +94,13 @@ func memoryTint(_ s: SystemSnapshot?) -> Color {
     case .normal: return s.memoryUsedFraction > 0.85 ? .orange : .accentColor
     }
 }
+
+/// Stands in for an app's Quit button while it's shutting down.
+struct QuittingLabel: View {
+    var body: some View {
+        HStack(spacing: 5) {
+            ProgressView().controlSize(.mini)
+            Text("Quitting…").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}

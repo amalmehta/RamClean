@@ -76,6 +76,8 @@ struct RecommendationRow: View {
                 } else if model.awaitingForceQuit.contains(key) {
                     Button("Force Quit", role: .destructive) { model.forceQuit(key: key) }.controlSize(.small)
                         .accessibilityLabel("Force Quit \(g.name)")
+                } else if model.quitting.contains(key) {
+                    QuittingLabel()
                 } else {
                     HStack(spacing: 6) {
                         Button("Quit") { model.quit(key: key, source: "recommendations") }.controlSize(.small)

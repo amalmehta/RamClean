@@ -15,6 +15,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var events: [HabitEvent] = []
     @Published private(set) var habits: [AppHabit] = []
     @Published private(set) var awaitingForceQuit: Set<String> = []
+    /// Apps asked to quit that haven't exited yet, so their Quit button can show progress.
+    @Published private(set) var quitting: Set<String> = []
     @Published private(set) var isTraining = false
     @Published private(set) var diskReport: DiskReport?
     @Published private(set) var diskScanStep: String?
@@ -160,7 +162,8 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 let key = Self.key(a)
-                self.awaitingForceQuit.remove(key)
+                let wasQuitting = self.quitting.remove(key) != nil
+                if self.awaitingForceQuit.remove(key) != nil || wasQuitting { self.appExited(key) }
                 if let r = self.kills.noteTerminated(key: key, at: Date()) { self.announceQuit(r) }
                 if a.activationPolicy == .regular {
                     self.habitStore.log(.terminated, key: key, name: a.localizedName ?? "", at: Date())
@@ -193,7 +196,7 @@ final class AppModel: ObservableObject {
         }
         if KillLabeler.label(for: outcome) == .keep {
             model.relabelLatest(key: r.key, since: r.killedAt.addingTimeInterval(-60), to: .keep)
-            retrain()
+            scheduleRetrain()
         }
         refreshEvents()
     }
@@ -286,29 +289,61 @@ final class AppModel: ObservableObject {
         requestedPanel = UsagePanel(rawValue: r.rawValue)
     }
 
-    /// Asks the app to quit normally, so it can save or prompt; Force Quit is only offered
-    /// if it's still running `forceQuitAfterSeconds` later. Apps with unsaved changes, or the
-    /// one you're using, need a confirmation first.
+    /// Asks the app to quit normally, so it can save or prompt. Apps with unsaved changes, or
+    /// the one you're using, need a confirmation first. The unsaved check runs off the main
+    /// thread, and the quit request goes out before any bookkeeping.
     func quit(key: String, source: String) {
         let apps = Self.runningApps(key)
-        guard !apps.isEmpty else { return }
+        guard !apps.isEmpty, !quitting.contains(key) else { return }
         let name = apps[0].localizedName ?? key
-        if let risk = Self.quitRisk(apps), !confirmQuit(name: name, reason: risk) {
-            lastNotified[key] = Date()
-            return
-        }
-        let now = Date()
-        record(key: key, label: .deadweight, source: source)
-        habitStore.recordDecision(.quitBySuggestion, key: key, name: name, detail: "from \(source)", at: now)
-        kills.recordKill(KillRecord(key: key, name: name, killedAt: now, source: source,
-                                    memoryBytes: assessments.first { $0.group.habitKey == key }?.group.memoryBytes))
-        apps.forEach { $0.terminate() }
-        refreshEvents()
+        let pids = apps.map(\.processIdentifier), front = apps.contains(where: \.isActive)
+        quitting.insert(key)
+        Task {
+            let unsaved = await Self.anyUnsavedDocuments(pids)
+            if let risk = Self.quitRisk(unsaved: unsaved, front: front), !confirmQuit(name: name, reason: risk) {
+                quitting.remove(key)
+                lastNotified[key] = Date()
+                return
+            }
+            let apps = Self.runningApps(key)
+            guard !apps.isEmpty else { quitting.remove(key); return }
+            apps.forEach { $0.terminate() }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + prefs.forceQuitAfterSeconds) { [weak self] in
-            guard let self, !Self.runningApps(key).isEmpty else { return }
-            self.awaitingForceQuit.insert(key)
-            self.notifier.offerForceQuit(key: key, name: name)
+            let now = Date()
+            kills.recordKill(KillRecord(key: key, name: name, killedAt: now, source: source,
+                                        memoryBytes: assessments.first { $0.group.habitKey == key }?.group.memoryBytes))
+            record(key: key, label: .deadweight, source: source)
+            habitStore.recordDecision(.quitBySuggestion, key: key, name: name, detail: "from \(source)", at: now)
+            refreshEvents()
+            watchQuit(key: key, name: name, pids: pids)
+        }
+    }
+
+    /// Offers Force Quit once the app has stopped answering for a few seconds in a row, or
+    /// after `forceQuitAfterSeconds` at the latest, instead of always waiting the full time.
+    private func watchQuit(key: String, name: String, pids: [pid_t]) {
+        let deadline = Date().addingTimeInterval(prefs.forceQuitAfterSeconds)
+        Task {
+            var unresponsive = 0
+            while true {
+                try? await Task.sleep(for: .seconds(1))
+                guard quitting.contains(key), !Self.runningApps(key).isEmpty else { return }
+                unresponsive = await Self.isUnresponsive(pids) ? unresponsive + 1 : 0
+                if unresponsive >= 3 || Date() >= deadline { break }
+            }
+            quitting.remove(key)
+            awaitingForceQuit.insert(key)
+            notifier.offerForceQuit(key: key, name: name)
+        }
+    }
+
+    /// The app is gone: drop it from the lists now, and re-measure memory a moment later
+    /// (once the system has reclaimed it) rather than waiting for the next check.
+    private func appExited(_ key: String) {
+        assessments.removeAll { $0.group.habitKey == key }
+        Task {
+            try? await Task.sleep(for: .seconds(1))
+            tick()
         }
     }
 
@@ -337,9 +372,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Why quitting this app needs a confirmation, or nil when it can go quietly.
-    private static func quitRisk(_ apps: [NSRunningApplication]) -> String? {
-        let unsaved = apps.contains { hasUnsavedDocuments($0.processIdentifier) }
-        let front = apps.contains(where: \.isActive)
+    private static func quitRisk(unsaved: Bool, front: Bool) -> String? {
         switch (unsaved, front) {
         case (true, true): return "It has unsaved changes, and you're using it right now."
         case (true, false): return "It has unsaved changes."
@@ -358,21 +391,49 @@ final class AppModel: ObservableObject {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
+    /// Checks every process of the app at once, off the main thread.
+    nonisolated static func anyUnsavedDocuments(_ pids: [pid_t]) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            for pid in pids { group.addTask { hasUnsavedDocuments(pid) } }
+            return await group.contains(true)
+        }
+    }
+
     /// True when any of the app's windows shows unsaved changes. Needs Accessibility access;
-    /// without it RamClean can't tell, and the app's own save prompt is the backstop.
-    static func hasUnsavedDocuments(_ pid: pid_t) -> Bool {
+    /// without it RamClean can't tell, and the app's own save prompt is the backstop. A hung
+    /// app counts as clean: it times out once rather than once per window.
+    nonisolated static func hasUnsavedDocuments(_ pid: pid_t) -> Bool {
         guard AXIsProcessTrusted() else { return false }
         let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(app, 0.5)
+        AXUIElementSetMessagingTimeout(app, axTimeout)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement] else { return false }
         return windows.contains { w in
-            AXUIElementSetMessagingTimeout(w, 0.5)
+            AXUIElementSetMessagingTimeout(w, axTimeout)
             var edited: CFTypeRef?
             return AXUIElementCopyAttributeValue(w, kAXEditedAttribute as CFString, &edited) == .success && (edited as? Bool) == true
         }
     }
+
+    /// True when every process of the app fails to answer Accessibility within `axTimeout`:
+    /// it's hung, not waiting on a save dialog. False when RamClean lacks Accessibility access.
+    nonisolated static func isUnresponsive(_ pids: [pid_t]) async -> Bool {
+        guard AXIsProcessTrusted(), !pids.isEmpty else { return false }
+        return await withTaskGroup(of: Bool.self) { group in
+            for pid in pids {
+                group.addTask {
+                    let app = AXUIElementCreateApplication(pid)
+                    AXUIElementSetMessagingTimeout(app, axTimeout)
+                    var role: CFTypeRef?
+                    return AXUIElementCopyAttributeValue(app, kAXRoleAttribute as CFString, &role) == .cannotComplete
+                }
+            }
+            return await group.allSatisfy { $0 }
+        }
+    }
+
+    private nonisolated static let axTimeout: Float = 0.25
 
     func keep(key: String, always: Bool, source: String) {
         let name = assessments.first { $0.group.habitKey == key }?.group.name ?? habitStore.habits[key]?.name ?? key
@@ -387,13 +448,27 @@ final class AppModel: ObservableObject {
         guard let a = assessments.first(where: { $0.group.habitKey == key }) else { return }
         model.add(TrainingExample(date: Date(), features: a.features, label: label, source: source))
         modelStatus = model.status
-        retrain()
+        scheduleRetrain()
     }
 
-    func retrain() {
+    private var retrainScheduled = false
+
+    /// Retrains a little later, once, however many answers arrive meanwhile, so training
+    /// doesn't compete for CPU and memory with an app that's busy quitting.
+    private func scheduleRetrain() {
+        guard !retrainScheduled else { return }
+        retrainScheduled = true
+        Task {
+            try? await Task.sleep(for: .seconds(15))
+            retrainScheduled = false
+            retrain(qos: .background)
+        }
+    }
+
+    func retrain(qos: DispatchQoS.QoSClass = .utility) {
         isTraining = true
         let model = model
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: qos).async {
             let status = model.train()
             DispatchQueue.main.async {
                 self.modelStatus = status

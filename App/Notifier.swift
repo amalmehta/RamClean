@@ -14,7 +14,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private static let forceCategory = "FORCE"
     private static let quitDoneCategory = "QUIT_DONE"
     private static let infoCategory = "INFO"
-    private static let alertFixCategory = "ALERT_WITH_FIX"
+    private static func fixCategory(_ r: Resource) -> String { "ALERT_WITH_FIX_\(r.rawValue.uppercased())" }
     private static let alertCategory = "ALERT"
 
     /// The ram picture on each kind of notification, from App/NotificationArt
@@ -32,6 +32,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// Each alert's one-tap fix label ("Quit Spotify", "Trash uv"), so an older alert keeps
+    /// its own button when a newer one arrives.
+    private var fixTitles: [Resource: String] = [:]
+
     /// Called with the button tapped and the notification's userInfo.
     var onAction: ((Action, [AnyHashable: Any]) -> Void)?
     @MainActor private(set) var authorized = false
@@ -39,18 +43,18 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     func setUp() {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        registerCategories(fixTitle: "Fix it")
+        registerCategories()
         center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
             Task { @MainActor in self.authorized = granted }
         }
     }
 
-    /// Categories are fixed per send, so the one-tap fix button is re-registered with
-    /// its current label ("Quit Spotify", "Trash uv") just before an alert goes out.
-    private func registerCategories(fixTitle: String) {
+    /// A category's buttons are fixed, so each resource with a fix gets its own category,
+    /// re-registered with its current label just before its alert goes out.
+    private func registerCategories() {
         let show = UNNotificationAction(identifier: Action.alertShow.rawValue, title: "Show recommendations", options: [.foreground])
         let snooze = UNNotificationAction(identifier: Action.alertSnooze.rawValue, title: "Snooze 1 hour", options: [])
-        UNUserNotificationCenter.current().setNotificationCategories([
+        let fixed: [UNNotificationCategory] = [
             UNNotificationCategory(identifier: Self.suggestionCategory, actions: [
                 UNNotificationAction(identifier: Action.quit.rawValue, title: "Quit", options: []),
                 UNNotificationAction(identifier: Action.keep.rawValue, title: "Keep running", options: []),
@@ -63,25 +67,29 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 UNNotificationAction(identifier: Action.relaunch.rawValue, title: "Relaunch", options: []),
             ], intentIdentifiers: []),
             UNNotificationCategory(identifier: Self.infoCategory, actions: [], intentIdentifiers: []),
-            UNNotificationCategory(identifier: Self.alertFixCategory, actions: [
-                UNNotificationAction(identifier: Action.alertFix.rawValue, title: fixTitle, options: []), show, snooze,
-            ], intentIdentifiers: []),
             UNNotificationCategory(identifier: Self.alertCategory, actions: [show, snooze], intentIdentifiers: []),
-        ])
+        ]
+        let fixes = fixTitles.map { resource, title in
+            UNNotificationCategory(identifier: Self.fixCategory(resource), actions: [
+                UNNotificationAction(identifier: Action.alertFix.rawValue, title: title, options: []), show, snooze,
+            ], intentIdentifiers: [])
+        }
+        UNUserNotificationCenter.current().setNotificationCategories(Set(fixed + fixes))
     }
 
     /// A threshold alert: what crossed the line, what to do, and a one-tap fix when there is one.
     func alert(_ content: AlertContent) {
         var info: [String: String] = ["resource": content.resource.rawValue]
         if let a = content.action {
-            registerCategories(fixTitle: a.label)
+            fixTitles[content.resource] = a.label
+            registerCategories()
             info["fixKind"] = a.kind.rawValue
             info["fixTarget"] = a.target
         }
         let n = UNMutableNotificationContent()
         n.title = content.title
         n.body = content.body
-        n.categoryIdentifier = content.action == nil ? Self.alertCategory : Self.alertFixCategory
+        n.categoryIdentifier = content.action == nil ? Self.alertCategory : Self.fixCategory(content.resource)
         n.userInfo = info
         n.sound = .default
         n.attachments = Self.attachments(Art(content.resource))

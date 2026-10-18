@@ -83,7 +83,7 @@ final class AppModel: ObservableObject {
         notifier.onAction = { [weak self] action, info in self?.handle(action, info: info) }
         notifier.setUp()
         observeWorkspace()
-        if let app = NSWorkspace.shared.frontmostApplication { frontmost = (Self.key(app), app.localizedName ?? "") }
+        if let app = NSWorkspace.shared.frontmostApplication { frontmost = (Self.key(app), Self.name(app)) }
         retrain()
         tick()
         scheduleTimer()
@@ -149,8 +149,8 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.creditForeground(now: Date())
-                self.frontmost = (Self.key(a), a.localizedName ?? "")
-                self.habitStore.markActive(key: Self.key(a), name: a.localizedName ?? "", at: Date())
+                self.frontmost = (Self.key(a), Self.name(a))
+                self.habitStore.markActive(key: Self.key(a), name: Self.name(a), at: Date())
             }
         })
         observers.append(nc.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] n in
@@ -164,9 +164,11 @@ final class AppModel: ObservableObject {
                 let key = Self.key(a)
                 let wasQuitting = self.quitting.remove(key) != nil
                 if self.awaitingForceQuit.remove(key) != nil || wasQuitting { self.appExited(key) }
+                // Its "Quit?" and "didn't quit" notifications are moot now, however it quit.
+                self.notifier.withdraw(["suggest-\(key)", "force-\(key)"])
                 if let r = self.kills.noteTerminated(key: key, at: Date()) { self.announceQuit(r) }
                 if a.activationPolicy == .regular {
-                    self.habitStore.log(.terminated, key: key, name: a.localizedName ?? "", at: Date())
+                    self.habitStore.log(.terminated, key: key, name: Self.name(a), at: Date())
                     self.refreshEvents()
                 }
             }
@@ -175,8 +177,9 @@ final class AppModel: ObservableObject {
 
     private func launched(_ a: NSRunningApplication) {
         guard a.activationPolicy == .regular else { return }
-        let key = Self.key(a), name = a.localizedName ?? key, now = Date()
+        let key = Self.key(a), name = Self.name(a), now = Date()
         habitStore.recordLaunch(key: key, name: name, at: now)
+        notifier.withdraw(["quit-done-\(key)"]) // nothing left to relaunch
         if let hit = kills.noteLaunch(key: key, at: now) { resolve(hit.record, hit.outcome, at: now) }
         refreshEvents()
     }
@@ -255,6 +258,11 @@ final class AppModel: ObservableObject {
                 // Use a scan from the last 6 hours, or run one and alert when it's done.
                 if let report = diskReport, diskScanStep == nil, now.timeIntervalSince(report.scannedAt) < 6 * 3600 {
                     sendAlert(AlertRecommender.disk(s, report))
+                } else if let report = diskReport {
+                    // Don't make you wait minutes for a scan: alert now from the last one,
+                    // minus anything since deleted, and refresh the list in the background.
+                    sendAlert(AlertRecommender.disk(s, report.droppingMissing()))
+                    scanDisk(byUser: false)
                 } else {
                     diskAlertWaitingForScan = true
                     scanDisk(byUser: false)
@@ -295,7 +303,7 @@ final class AppModel: ObservableObject {
     func quit(key: String, source: String) {
         let apps = Self.runningApps(key)
         guard !apps.isEmpty, !quitting.contains(key) else { return }
-        let name = apps[0].localizedName ?? key
+        let name = Self.name(apps[0])
         let pids = apps.map(\.processIdentifier), front = apps.contains(where: \.isActive)
         quitting.insert(key)
         Task {
@@ -352,7 +360,7 @@ final class AppModel: ObservableObject {
         kills.markForced(key: key)
         apps.forEach { $0.forceTerminate() }
         awaitingForceQuit.remove(key)
-        if let name = apps.first?.localizedName {
+        if let name = apps.first.map(Self.name) {
             habitStore.log(.forceQuit, key: key, name: name, at: Date())
             refreshEvents()
         }
@@ -361,6 +369,10 @@ final class AppModel: ObservableObject {
     /// Reopens an app RamClean quit, by its bundle ID (or path, for apps without one).
     func relaunch(key: String) {
         let name = habitStore.habits[key]?.name ?? key
+        if AppKey.project(bundlePath: key) != nil {
+            notifier.problem("Couldn't relaunch \(name)", "It's a development build. Start it again from its project.")
+            return
+        }
         guard let url = key.hasPrefix("/") ? URL(fileURLWithPath: key) : NSWorkspace.shared.urlForApplication(withBundleIdentifier: key) else {
             notifier.problem("Couldn't relaunch \(name)", "RamClean can't find the app anymore.")
             return
@@ -618,7 +630,11 @@ final class AppModel: ObservableObject {
     // MARK: - Helpers
 
     static func key(_ app: NSRunningApplication) -> String {
-        app.bundleIdentifier ?? app.bundleURL?.path ?? "pid:\(app.processIdentifier)"
+        AppKey.key(bundleID: app.bundleIdentifier, bundlePath: app.bundleURL?.path) ?? "pid:\(app.processIdentifier)"
+    }
+
+    static func name(_ app: NSRunningApplication) -> String {
+        AppKey.name(app.localizedName ?? "", bundleID: app.bundleIdentifier, bundlePath: app.bundleURL?.path)
     }
 
     static func runningApps(_ key: String) -> [NSRunningApplication] {

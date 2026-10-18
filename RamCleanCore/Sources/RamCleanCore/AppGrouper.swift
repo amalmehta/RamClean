@@ -38,8 +38,33 @@ public struct AppGroup: Identifiable, Sendable, Equatable {
     public var hostedCPUPercent: Double
 
     /// The key habits and training examples are stored under.
-    public var habitKey: String { bundleID ?? id }
+    public var habitKey: String { AppKey.key(bundleID: bundleID, bundlePath: bundlePath) ?? id }
     public var memoryMB: Double { Double(memoryBytes) / 1_048_576 }
+}
+
+/// How RamClean names and files an app. Most apps go by their bundle ID, but a framework's
+/// stock runtime gives every app built on it the same one (each `electron .` run of a project
+/// is "com.github.Electron"), so those go by where they live instead.
+public enum AppKey {
+    public static let sharedBundleIDs: Set<String> = ["com.github.Electron", "org.nwjs.nwjs"]
+
+    public static func key(bundleID: String?, bundlePath: String?) -> String? {
+        if let id = bundleID, !sharedBundleIDs.contains(id) { return id }
+        return bundlePath ?? bundleID
+    }
+
+    /// The project a dev runtime was started from: the folder holding its `node_modules`.
+    public static func project(bundlePath: String?) -> String? {
+        guard let p = bundlePath, let r = p.range(of: "/node_modules/") else { return nil }
+        let folder = (String(p[..<r.lowerBound]) as NSString).lastPathComponent.trimmingCharacters(in: .whitespaces)
+        return folder.isEmpty ? nil : folder
+    }
+
+    /// "Electron (trip_planner)" for a dev runtime, so two projects don't look like one app.
+    public static func name(_ name: String, bundleID: String?, bundlePath: String?) -> String {
+        guard bundleID.map(sharedBundleIDs.contains) ?? true, let project = project(bundlePath: bundlePath) else { return name }
+        return "\(name) (\(project))"
+    }
 }
 
 public enum AppGrouper {
@@ -86,7 +111,8 @@ public enum AppGrouper {
 
             var g = groups[key] ?? AppGroup(
                 id: key, kind: kind,
-                name: info?.name ?? (bundle.map { (($0 as NSString).lastPathComponent as NSString).deletingPathExtension } ?? proc.name),
+                name: AppKey.name(info?.name ?? (bundle.map { (($0 as NSString).lastPathComponent as NSString).deletingPathExtension } ?? proc.name),
+                                  bundleID: info?.bundleID, bundlePath: info?.bundlePath ?? bundle),
                 bundleID: info?.bundleID, bundlePath: info?.bundlePath ?? bundle,
                 mainPID: info?.pid, pids: [], memoryBytes: 0, cpuPercent: 0,
                 hostedCommands: [], hostedCPUPercent: 0)

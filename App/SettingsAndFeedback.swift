@@ -18,6 +18,9 @@ struct SettingsView: View {
 
 private struct GeneralSettings: View {
     @EnvironmentObject var model: AppModel
+    /// Re-checked every second, so the row flips to "On" as soon as you grant access.
+    @State private var trusted = AXIsProcessTrusted()
+    private let recheck = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Form {
@@ -32,7 +35,7 @@ private struct GeneralSettings: View {
             Text("RamClean asks apps to quit politely first. If one is still running after this long, it offers Force Quit (which loses unsaved work).")
                 .font(.caption).foregroundStyle(.secondary)
             LabeledContent("Spot unsaved changes before quitting") {
-                if AXIsProcessTrusted() {
+                if trusted {
                     Text("On").foregroundStyle(.secondary)
                 } else {
                     Button("Allow Accessibility…") {
@@ -44,6 +47,7 @@ private struct GeneralSettings: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
+        .onReceive(recheck) { _ in trusted = AXIsProcessTrusted() }
     }
 }
 

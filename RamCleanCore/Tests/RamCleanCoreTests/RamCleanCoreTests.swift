@@ -36,6 +36,31 @@ final class GroupingTests: XCTestCase {
         XCTAssertEqual(groups.first { $0.id == "cli:claude" }?.kind, .commandLine)
         XCTAssertEqual(groups.first { $0.id == "proc:cloudd" }?.kind, .background)
     }
+
+    func testDevRuntimesInDifferentProjectsAreSeparateApps() {
+        let trip = "/Users/me/code/trip_planner /node_modules/electron/dist/Electron.app"
+        let notes = "/Users/me/code/notes/node_modules/electron/dist/Electron.app"
+        let procs = [
+            ProcessSnapshot(pid: 40, ppid: 1, name: "Electron", path: trip + "/Contents/MacOS/Electron", footprintBytes: 200 << 20),
+            ProcessSnapshot(pid: 41, ppid: 40, name: "Electron Helper", path: trip + "/Contents/Frameworks/Electron Helper.app/Contents/MacOS/Electron Helper", footprintBytes: 100 << 20),
+            ProcessSnapshot(pid: 50, ppid: 1, name: "Electron", path: notes + "/Contents/MacOS/Electron", footprintBytes: 150 << 20),
+        ]
+        let apps = [
+            RunningAppInfo(pid: 40, bundleID: "com.github.Electron", name: "Electron", bundlePath: trip, isRegular: true),
+            RunningAppInfo(pid: 50, bundleID: "com.github.Electron", name: "Electron", bundlePath: notes, isRegular: true),
+        ]
+        let groups = AppGrouper.group(procs, apps: apps)
+        XCTAssertEqual(groups.map(\.name), ["Electron (trip_planner)", "Electron (notes)"])
+        XCTAssertEqual(groups.map(\.habitKey), [trip, notes])
+        XCTAssertEqual(groups[0].pids.sorted(), [40, 41])
+    }
+
+    func testOrdinaryAppsKeepTheirBundleIDAndName() {
+        XCTAssertEqual(AppKey.key(bundleID: "com.spotify.client", bundlePath: "/Applications/Spotify.app"), "com.spotify.client")
+        XCTAssertEqual(AppKey.key(bundleID: nil, bundlePath: "/opt/Tool.app"), "/opt/Tool.app")
+        XCTAssertEqual(AppKey.name("Spotify", bundleID: "com.spotify.client", bundlePath: "/x/node_modules/y/Spotify.app"), "Spotify")
+        XCTAssertEqual(AppKey.name("Electron", bundleID: "com.github.Electron", bundlePath: "/Applications/Electron.app"), "Electron")
+    }
 }
 
 final class ProtectionTests: XCTestCase {
@@ -569,5 +594,17 @@ final class KillLabelTests: XCTestCase {
         ledger.noteTerminated(key: "a", at: at(minutes: 25.1))
         XCTAssertEqual(ledger.pending.count, 1)
         XCTAssertEqual(ledger.noteLaunch(key: "a", at: at(minutes: 50))?.outcome, .relaunched)
+    }
+}
+
+final class StaleDiskReportTests: XCTestCase {
+    func testDroppingMissingKeepsOnlyItemsStillOnDisk() {
+        let report = DiskReport(items: [
+            DiskItem(name: "uv", path: "/Users/me/.cache/uv", bytes: 5 << 30, kind: .cache, reason: ""),
+            DiskItem(name: "old.zip", path: "/Users/me/Downloads/old.zip", bytes: 1 << 30, kind: .oldDownload, reason: ""),
+        ], scannedAt: Date(timeIntervalSince1970: 0))
+        let left = report.droppingMissing { $0 != "/Users/me/.cache/uv" }
+        XCTAssertEqual(left.items.map(\.name), ["old.zip"])
+        XCTAssertEqual(left.scannedAt, report.scannedAt)
     }
 }

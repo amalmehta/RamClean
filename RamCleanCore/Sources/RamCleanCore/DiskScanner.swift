@@ -53,6 +53,12 @@ public struct DiskReport: Equatable, Sendable, Codable {
 
     public func items(_ kind: DiskItem.Kind) -> [DiskItem] { items.filter { $0.kind == kind } }
 
+    /// This report without anything that has since been deleted or moved, so an older scan
+    /// can still back an alert without recommending files that are gone.
+    public func droppingMissing(exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> DiskReport {
+        DiskReport(items: items.filter { exists($0.path) }, scannedAt: scannedAt)
+    }
+
     /// Something you can act on to win space: rebuildable or unused items you could trash,
     /// big old files to move off the Mac, and the Trash itself (empty it in Finder).
     static func isWin(_ i: DiskItem) -> Bool {

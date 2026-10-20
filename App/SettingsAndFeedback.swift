@@ -1,5 +1,6 @@
 import AppKit
 import RamCleanCore
+import ServiceManagement
 import SwiftUI
 
 struct SettingsView: View {
@@ -20,10 +21,21 @@ private struct GeneralSettings: View {
     @EnvironmentObject var model: AppModel
     /// Re-checked every second, so the row flips to "On" as soon as you grant access.
     @State private var trusted = AXIsProcessTrusted()
+    @State private var login = SMAppService.mainApp.status
+    @State private var loginError: String?
     private let recheck = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Form {
+            Toggle("Open at login", isOn: Binding(get: { login == .enabled || login == .requiresApproval }, set: setOpenAtLogin))
+            if login == .requiresApproval {
+                LabeledContent("macOS needs your OK to open RamClean at login") {
+                    Button("Open Login Items…") { SMAppService.openSystemSettingsLoginItems() }
+                }
+            }
+            if let loginError {
+                Text(loginError).font(.caption).foregroundStyle(.red)
+            }
             Toggle("Send notifications suggesting apps to quit", isOn: $model.prefs.notificationsEnabled)
             Button("Send a test notification") { model.notifier.sendTest() }
             Picker("Check every", selection: $model.prefs.checkInterval) {
@@ -47,7 +59,22 @@ private struct GeneralSettings: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
-        .onReceive(recheck) { _ in trusted = AXIsProcessTrusted() }
+        .onReceive(recheck) { _ in
+            trusted = AXIsProcessTrusted()
+            login = SMAppService.mainApp.status
+        }
+    }
+
+    /// RamClean only watches while it's running, so opening at login keeps its habit
+    /// data and alerts going after a restart.
+    private func setOpenAtLogin(_ on: Bool) {
+        loginError = nil
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch {
+            loginError = "Couldn't \(on ? "turn on" : "turn off") Open at login: \(error.localizedDescription)"
+        }
+        login = SMAppService.mainApp.status
     }
 }
 

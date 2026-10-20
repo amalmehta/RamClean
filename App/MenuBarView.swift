@@ -32,6 +32,15 @@ struct MenuBarView: View {
                     }
                 }
             }
+            let waiting = dead.filter { !model.quitting.contains($0.group.habitKey) }
+            if waiting.count >= 2 {
+                let total = waiting.reduce(UInt64(0)) { $0 + $1.group.memoryBytes }
+                Button("Quit all \(waiting.count) · frees about \(Format.bytes(total))") {
+                    for a in waiting { model.quit(key: a.group.habitKey, source: "menu bar, quit all") }
+                }
+                .controlSize(.small)
+                .help("Quits every app RamClean thinks is deadweight, including any not shown above")
+            }
             Divider()
             HStack {
                 Button("Open RamClean") {

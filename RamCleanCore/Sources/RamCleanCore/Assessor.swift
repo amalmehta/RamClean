@@ -46,13 +46,11 @@ public struct Assessor {
             let ctx = ProtectionContext(prefs: prefs, frontmostKey: frontmostKey, selfBundleID: selfBundleID,
                                         audioPIDs: audioPIDs, cpuAverage: cpu, minutesSinceActive: s.minutesSinceActive,
                                         everActive: s.everActive)
-            let (value, usedModel) = score(f)
-            let verdict: Verdict
-            if let reason = ProtectionRules.reason(for: g, ctx) {
-                verdict = .protected(reason)
-            } else {
-                verdict = value >= prefs.deadweightThreshold ? .deadweight : .keep
-            }
+            let reason = ProtectionRules.reason(for: g, ctx)
+            // Only apps that could be suggested need the model: a prediction for each of the
+            // hundreds of background processes was most of the time spent on every check.
+            let (value, usedModel) = reason == nil ? score(f) : (HeuristicScorer.score(f), false)
+            let verdict: Verdict = reason.map { .protected($0) } ?? (value >= prefs.deadweightThreshold ? .deadweight : .keep)
             return Assessment(group: g, features: f, score: value, usedModel: usedModel, verdict: verdict, cpuAverage: cpu,
                               everActive: s.everActive)
         }

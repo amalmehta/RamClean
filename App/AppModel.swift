@@ -49,6 +49,10 @@ final class AppModel: ObservableObject {
     private let processSampler = ProcessSampler()
     private let systemSampler = SystemSampler()
     private var cpuHistory = CPUHistory()
+    /// Reading every process, the system numbers and Core Audio takes 50–150 ms per check
+    /// (nearly a second the first time), so it happens here rather than on the main thread.
+    private let samplingQueue = DispatchQueue(label: "com.amalmehta.RamClean.sampling", qos: .utility)
+    private var sampling = false
     private var timer: Timer?
     private var frontmost: (key: String, name: String)?
     private var lastCredit = Date()
@@ -98,20 +102,31 @@ final class AppModel: ObservableObject {
 
     // MARK: - Sampling
 
+    /// Samples on `samplingQueue`, then judges the results on the main thread. A check that
+    /// arrives while one is still sampling is skipped.
     func tick() {
-        let now = Date()
-        creditForeground(now: now)
-
-        let snapshot = systemSampler.sample()
-        let procs = processSampler.sample()
+        guard !sampling else { return }
+        sampling = true
         let running = NSWorkspace.shared.runningApplications.map {
             RunningAppInfo(pid: $0.processIdentifier, bundleID: $0.bundleIdentifier, name: $0.localizedName ?? "",
                            bundlePath: $0.bundleURL?.path, isRegular: $0.activationPolicy == .regular)
         }
-        let groups = AppGrouper.group(procs, apps: running)
+        let systemSampler = systemSampler, processSampler = processSampler
+        samplingQueue.async {
+            let snapshot = systemSampler.sample()
+            let groups = AppGrouper.group(processSampler.sample(), apps: running)
+            let audio = AudioActivity.pidsPlayingAudio()
+            Task { @MainActor in self.assess(snapshot, groups, audio: audio) }
+        }
+    }
+
+    private func assess(_ snapshot: SystemSnapshot, _ groups: [AppGroup], audio: Set<Int32>) {
+        sampling = false
+        let now = Date()
+        creditForeground(now: now)
         let averages = cpuHistory.record(groups)
         let assessor = Assessor(prefs: prefs, frontmostKey: frontmost?.key, selfBundleID: Bundle.main.bundleIdentifier,
-                                audioPIDs: AudioActivity.pidsPlayingAudio(), cpuAverages: averages, now: now)
+                                audioPIDs: audio, cpuAverages: averages, now: now)
         let store = habitStore, model = model
         let result = assessor.assess(groups, stats: { store.stats(for: $0, now: now) }, score: { model.score($0) })
 

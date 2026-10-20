@@ -75,9 +75,18 @@ public enum AppGrouper {
 
     /// The outermost `.app` bundle a binary lives in, so helpers nested inside
     /// `Foo.app/Contents/Frameworks/Foo Helper.app` still group under Foo.app.
+    /// Searches the path's bytes: Foundation's `range(of:)` was most of the grouping time
+    /// with a thousand processes to sort on every check.
     public static func bundlePath(for path: String) -> String? {
-        if let r = path.range(of: ".app/") { return String(path[..<r.lowerBound]) + ".app" }
-        return path.hasSuffix(".app") ? path : nil
+        var path = path
+        let outer: String? = path.withUTF8 { b in
+            guard b.count >= 5 else { return nil }
+            for i in 0...(b.count - 5) where b[i] == 0x2E && b[i + 1] == 0x61 && b[i + 2] == 0x70 && b[i + 3] == 0x70 && b[i + 4] == 0x2F {
+                return String(decoding: UnsafeBufferPointer(rebasing: b[..<(i + 4)]), as: UTF8.self) // ".app/" → keep ".app"
+            }
+            return nil
+        }
+        return outer ?? (path.hasSuffix(".app") ? path : nil)
     }
 
     public static func group(_ processes: [ProcessSnapshot], apps: [RunningAppInfo]) -> [AppGroup] {
@@ -109,17 +118,19 @@ public enum AppGrouper {
             }
             keyByPID[proc.pid] = key
 
-            var g = groups[key] ?? AppGroup(
-                id: key, kind: kind,
-                name: AppKey.name(info?.name ?? (bundle.map { (($0 as NSString).lastPathComponent as NSString).deletingPathExtension } ?? proc.name),
-                                  bundleID: info?.bundleID, bundlePath: info?.bundlePath ?? bundle),
-                bundleID: info?.bundleID, bundlePath: info?.bundlePath ?? bundle,
-                mainPID: info?.pid, pids: [], memoryBytes: 0, cpuPercent: 0,
-                hostedCommands: [], hostedCPUPercent: 0)
-            g.pids.append(proc.pid)
-            g.memoryBytes += proc.footprintBytes
-            g.cpuPercent += proc.cpuPercent
-            groups[key] = g
+            if groups[key] == nil {
+                groups[key] = AppGroup(
+                    id: key, kind: kind,
+                    name: AppKey.name(info?.name ?? (bundle.map { (($0 as NSString).lastPathComponent as NSString).deletingPathExtension } ?? proc.name),
+                                      bundleID: info?.bundleID, bundlePath: info?.bundlePath ?? bundle),
+                    bundleID: info?.bundleID, bundlePath: info?.bundlePath ?? bundle,
+                    mainPID: info?.pid, pids: [], memoryBytes: 0, cpuPercent: 0,
+                    hostedCommands: [], hostedCPUPercent: 0)
+            }
+            // Mutate in place: copying the group out and back would copy its pid list every time.
+            groups[key]!.pids.append(proc.pid)
+            groups[key]!.memoryBytes += proc.footprintBytes
+            groups[key]!.cpuPercent += proc.cpuPercent
         }
 
         // Attach terminal work to the app that hosts it: Terminal → login → zsh → claude.

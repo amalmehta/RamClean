@@ -104,3 +104,28 @@ struct QuittingLabel: View {
         }
     }
 }
+
+/// Restarts an app that has swelled since it started: frees the growth, keeps the app.
+struct RestartButton: View {
+    @EnvironmentObject var model: AppModel
+    var name: String
+    var key: String
+    var growth: MemoryGrowth.Growth
+
+    var body: some View {
+        Button("Restart") { model.restart(key: key) }
+            .controlSize(.small)
+            .accessibilityLabel("Restart \(name)")
+            .help("Quit \(name) and open it again, freeing about \(Format.bytes(growth.freed)) it has built up. Not counted as deadweight.")
+    }
+}
+
+enum GrowthText {
+    static func short(_ g: MemoryGrowth.Growth) -> String {
+        "grew \(Format.bytes(g.from)) → \(Format.bytes(g.to))"
+    }
+    static func long(_ g: MemoryGrowth.Growth) -> String {
+        "Grew from \(Format.bytes(g.from)) to \(Format.bytes(g.to)) since \(g.since.formatted(date: .omitted, time: .shortened)); restarting frees about \(Format.bytes(g.freed))"
+    }
+}
+

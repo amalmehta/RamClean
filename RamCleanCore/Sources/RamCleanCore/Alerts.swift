@@ -78,9 +78,9 @@ public struct ThresholdMonitor {
 
 /// The one-tap fix offered as a notification button.
 public struct AlertAction: Equatable, Sendable {
-    public enum Kind: String, Sendable { case quit, trash }
+    public enum Kind: String, Sendable { case quit, trash, restart }
     public var kind: Kind
-    /// App key for `.quit`, file path for `.trash`.
+    /// App key for `.quit` and `.restart`, file path for `.trash`.
     public var target: String
     public var label: String
 }
@@ -115,13 +115,20 @@ public enum AlertRecommender {
         a.reasons.first { !$0.contains("%") }?.lowercased() ?? ""
     }
 
-    public static func memory(_ s: SystemSnapshot, _ list: [Assessment]) -> AlertContent {
+    /// `grown` names apps whose memory has swelled since they started; restarting the biggest
+    /// is offered when nothing idle is worth quitting.
+    public static func memory(_ s: SystemSnapshot, _ list: [Assessment], grown: [String: MemoryGrowth.Growth] = [:]) -> AlertContent {
         let title = "Memory is \(pct(s.memoryUsedFraction * 100)) full"
         var body = "\(HumanFormat.bytes(s.usedMemory)) of \(HumanFormat.bytes(s.totalMemory)) used"
         if s.pressure != .normal { body += ", pressure \(s.pressure.label.lowercased())" }
         body += ". "
         let picks = Array(quittable(list, by: { $0.group.memoryMB }, minimum: 100).prefix(2))
         if picks.isEmpty {
+            if let (a, g) = list.compactMap({ a in grown[a.group.habitKey].map { (a, $0) } }).max(by: { $0.1.freed < $1.1.freed }) {
+                body += "Nothing idle is worth quitting, but \(a.group.name) has grown from \(HumanFormat.bytes(g.from)) to \(HumanFormat.bytes(g.to)) since it started. Restarting it would free about \(HumanFormat.bytes(g.freed))."
+                return AlertContent(resource: .memory, title: title, body: body,
+                                    action: AlertAction(kind: .restart, target: a.group.habitKey, label: "Restart \(a.group.name)"))
+            }
             if let big = list.filter({ $0.group.kind == .app }).max(by: { $0.group.memoryBytes < $1.group.memoryBytes }) {
                 body += "Nothing idle is worth quitting; the biggest is \(big.group.name) (\(HumanFormat.bytes(big.group.memoryBytes)), \(why(big)))."
             }
@@ -151,6 +158,15 @@ public enum AlertRecommender {
         let top = picks[0]
         return AlertContent(resource: .cpu, title: title, body: body,
                             action: AlertAction(kind: .quit, target: top.group.habitKey, label: "Quit \(top.group.name)"))
+    }
+
+    /// The early warning: the disk isn't over its line yet, but will be in `days` at this rate.
+    public static func diskForecast(_ s: SystemSnapshot, _ report: DiskReport?, days: Double, lossPerDay: Double) -> AlertContent {
+        var content = disk(s, report)
+        let when = days < 1.5 ? "about a day" : "about \(Int(days.rounded())) days"
+        content.title = "Disk will be full in \(when)"
+        content.body = "Free space is shrinking by \(HumanFormat.bytes(UInt64(lossPerDay))) a day. " + content.body
+        return content
     }
 
     public static func disk(_ s: SystemSnapshot, _ report: DiskReport?) -> AlertContent {

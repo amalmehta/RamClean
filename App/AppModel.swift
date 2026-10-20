@@ -17,6 +17,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var awaitingForceQuit: Set<String> = []
     /// Apps asked to quit that haven't exited yet, so their Quit button can show progress.
     @Published private(set) var quitting: Set<String> = []
+    /// Apps whose memory has swelled since they started, by key: restarting frees the growth.
+    @Published private(set) var grown: [String: MemoryGrowth.Growth] = [:]
+    /// Days until the disk reaches its alert line at the current rate, when it's shrinking.
+    @Published private(set) var diskFullInDays: Double?
     @Published private(set) var isTraining = false
     @Published private(set) var diskReport: DiskReport?
     @Published private(set) var diskScanStep: String?
@@ -49,6 +53,12 @@ final class AppModel: ObservableObject {
     private let processSampler = ProcessSampler()
     private let systemSampler = SystemSampler()
     private var cpuHistory = CPUHistory()
+    private var memoryGrowth = MemoryGrowth()
+    private var diskHistory: DiskHistory
+    private var diskHistoryURL: URL { dataDirectory.appendingPathComponent("disk-history.json") }
+    /// Apps being restarted: opened again as soon as they exit.
+    private var pendingRelaunch: Set<String> = []
+    private static let lastForecastKey = "RamCleanLastDiskForecastAlert"
     /// Reading every process, the system numbers and Core Audio takes 50–150 ms per check
     /// (nearly a second the first time), so it happens here rather than on the main thread.
     private let samplingQueue = DispatchQueue(label: "com.amalmehta.RamClean.sampling", qos: .utility)
@@ -72,6 +82,7 @@ final class AppModel: ObservableObject {
         kills = KillLedger(directory: dataDirectory)
         prefs = Self.loadPrefs()
         sizeCache = SizeCache(contentsOf: dataDirectory.appendingPathComponent("sizes.json"))
+        diskHistory = DiskHistory(contentsOf: dataDirectory.appendingPathComponent("disk-history.json"))
         // Last disk scan, so "What to clear" opens instantly; it refreshes in the background.
         if let data = try? Data(contentsOf: dataDirectory.appendingPathComponent("disk-report.json")),
            let saved = try? HabitStore.decoder.decode(DiskReport.self, from: data) {
@@ -132,6 +143,13 @@ final class AppModel: ObservableObject {
 
         system = snapshot
         assessments = result
+        memoryGrowth.record(groups, now: now)
+        grown = Dictionary(groups.compactMap { g in memoryGrowth.growth(of: g, now: now).map { (g.habitKey, $0) } },
+                           uniquingKeysWith: { a, _ in a })
+        if diskHistory.record(free: snapshot.diskFree, at: now) { diskHistory.save(to: diskHistoryURL) }
+        let floor = Int64(Double(snapshot.diskTotal) * (1 - prefs.diskAlertUsedPercent / 100))
+        diskFullInDays = diskHistory.daysUntil(free: floor, now: now)
+        checkDiskForecast(snapshot, now: now)
         habits = habitStore.habits.values.sorted { lhs, rhs in
             (habitStore.stats(for: lhs.key, now: now).avgDailyMinutes14d) > (habitStore.stats(for: rhs.key, now: now).avgDailyMinutes14d)
         }
@@ -177,6 +195,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 let key = Self.key(a)
+                if self.pendingRelaunch.remove(key) != nil { self.relaunch(key: key) }
                 let wasQuitting = self.quitting.remove(key) != nil
                 if self.awaitingForceQuit.remove(key) != nil || wasQuitting { self.appExited(key) }
                 // Its "Quit?" and "didn't quit" notifications are moot now, however it quit.
@@ -273,7 +292,7 @@ final class AppModel: ObservableObject {
     private func checkThresholds(_ s: SystemSnapshot, _ list: [Assessment], now: Date) {
         for r in thresholds.update(s, now: now) {
             switch r {
-            case .memory: sendAlert(AlertRecommender.memory(s, list))
+            case .memory: sendAlert(AlertRecommender.memory(s, list, grown: grown))
             case .cpu: sendAlert(AlertRecommender.cpu(s, list))
             case .disk:
                 // Use a scan from the last 6 hours, or run one and alert when it's done.
@@ -292,6 +311,18 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Warns, at most once a day, when the disk will reach its alert line within three days at
+    /// the current rate, naming what to clear from the last scan, before it's an emergency.
+    private func checkDiskForecast(_ s: SystemSnapshot, now: Date) {
+        guard prefs.alertsEnabled, let days = diskFullInDays, days <= 3,
+              let loss = diskHistory.lossPerDay(now: now) else { return }
+        let last = UserDefaults.standard.object(forKey: Self.lastForecastKey) as? Date ?? .distantPast
+        guard now.timeIntervalSince(last) >= 86_400 else { return }
+        UserDefaults.standard.set(now, forKey: Self.lastForecastKey)
+        sendAlert(AlertRecommender.diskForecast(s, diskReport?.droppingMissing(), days: days, lossPerDay: loss))
+        if diskReport.map({ now.timeIntervalSince($0.scannedAt) > 6 * 3600 }) ?? true { scanDisk(byUser: false) }
+    }
+
     private func sendAlert(_ content: AlertContent) {
         notifier.alert(content)
         lastAnyNotification = Date()
@@ -305,6 +336,7 @@ final class AppModel: ObservableObject {
               let target = info["fixTarget"] as? String else { return }
         switch kind {
         case .quit: quit(key: target, source: "alert")
+        case .restart: restart(key: target)
         case .trash:
             let item = diskReport?.items.first { $0.path == target }
                 ?? DiskItem(name: (target as NSString).lastPathComponent, path: target, bytes: nil, kind: .cache, reason: "")
@@ -343,6 +375,32 @@ final class AppModel: ObservableObject {
                                         memoryBytes: assessments.first { $0.group.habitKey == key }?.group.memoryBytes))
             record(key: key, label: .deadweight, source: source)
             habitStore.recordDecision(.quitBySuggestion, key: key, name: name, detail: "from \(source)", at: now)
+            refreshEvents()
+            watchQuit(key: key, name: name, pids: pids)
+        }
+    }
+
+    /// Quits the app and opens it again once it has exited, to free the memory it has built
+    /// up. Unlike Quit, this isn't a "deadweight" answer, so nothing is learned from it.
+    func restart(key: String) {
+        let apps = Self.runningApps(key)
+        guard !apps.isEmpty, !quitting.contains(key) else { return }
+        let name = Self.name(apps[0])
+        let pids = apps.map(\.processIdentifier), front = apps.contains(where: \.isActive)
+        let freed = grown[key]?.freed
+        quitting.insert(key)
+        Task {
+            let unsaved = await Self.anyUnsavedDocuments(pids)
+            if let risk = Self.quitRisk(unsaved: unsaved, front: front), !confirmQuit(name: name, reason: risk, restarting: true) {
+                quitting.remove(key)
+                return
+            }
+            let apps = Self.runningApps(key)
+            guard !apps.isEmpty else { quitting.remove(key); return }
+            pendingRelaunch.insert(key)
+            apps.forEach { $0.terminate() }
+            habitStore.log(.restarted, key: key, name: name,
+                           detail: freed.map { "to free about \(Format.bytes($0)) it had built up" }, at: Date())
             refreshEvents()
             watchQuit(key: key, name: name, pids: pids)
         }
@@ -414,11 +472,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func confirmQuit(name: String, reason: String) -> Bool {
+    private func confirmQuit(name: String, reason: String, restarting: Bool = false) -> Bool {
+        let verb = restarting ? "Restart" : "Quit"
         let alert = NSAlert()
-        alert.messageText = "Quit \(name)?"
-        alert.informativeText = "\(reason) RamClean will ask it to quit normally, so it can offer to save first."
-        alert.addButton(withTitle: "Quit")
+        alert.messageText = "\(verb) \(name)?"
+        alert.informativeText = "\(reason) RamClean will ask it to quit normally, so it can offer to save first\(restarting ? ", then open it again" : "")."
+        alert.addButton(withTitle: verb)
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
         return alert.runModal() == .alertFirstButtonReturn

@@ -66,18 +66,20 @@ struct RecommendationRow: View {
                     Text(panel == .cpu ? "\(Int(assessment.cpuAverage.rounded()))% CPU" : Format.bytes(g.memoryBytes))
                         .font(.callout).monospacedDigit().foregroundStyle(.secondary)
                 }
-                Text(assessment.reasons.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                Text(((model.grown[key].map { [GrowthText.long($0)] } ?? []) + assessment.reasons).joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 6) {
                 verdict
-                if case .protected = assessment.verdict {
-                } else if model.awaitingForceQuit.contains(key) {
+                if model.awaitingForceQuit.contains(key) {
                     Button("Force Quit", role: .destructive) { model.forceQuit(key: key) }.controlSize(.small)
                         .accessibilityLabel("Force Quit \(g.name)")
                 } else if model.quitting.contains(key) {
                     QuittingLabel()
+                } else if case .protected = assessment.verdict {
+                    if let growth = model.grown[key] { RestartButton(name: g.name, key: key, growth: growth) }
                 } else {
                     HStack(spacing: 6) {
                         Button("Quit") { model.quit(key: key, source: "recommendations") }.controlSize(.small)

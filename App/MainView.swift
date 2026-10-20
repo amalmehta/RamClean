@@ -127,7 +127,8 @@ struct OverviewView: View {
                          tint: memoryTint(s), hint: "What to quit"))
                 bar(.cpu, UsageBar(title: "CPU", value: s.cpuPercent / 100, detail: "All cores", tint: .blue, hint: "What's busy"))
                 bar(.disk, UsageBar(title: "Disk used", value: 1 - s.diskFreeFraction,
-                         detail: "\(Format.bytes(UInt64(max(0, s.diskFree)))) free of \(Format.bytes(UInt64(max(0, s.diskTotal))))",
+                         detail: "\(Format.bytes(UInt64(max(0, s.diskFree)))) free of \(Format.bytes(UInt64(max(0, s.diskTotal))))"
+                            + (model.diskFullInDays.map { $0 <= 30 ? " · full in ~\(max(1, Int($0.rounded()))) day\(Int($0.rounded()) <= 1 ? "" : "s") at this rate" : "" } ?? ""),
                          tint: (1 - s.diskFreeFraction) * 100 >= model.prefs.diskAlertUsedPercent - 5 ? .red : .purple, hint: "What to clear"))
             }
         } else {
@@ -203,18 +204,23 @@ struct AppRow: View {
             : "not used since RamClean started watching"]
         if f.avgDailyMinutes14d >= 1 { parts.append("\(Int(f.avgDailyMinutes14d)) min/day") }
         if assessment.group.pids.count > 1 { parts.append("\(assessment.group.pids.count) processes") }
+        if let g = model.grown[assessment.group.habitKey] { parts.insert(GrowthText.short(g), at: 0) }
         return parts.joined(separator: " · ")
     }
 
     @ViewBuilder private var actions: some View {
         let key = assessment.group.habitKey
-        if case .protected = assessment.verdict {
-            Color.clear.frame(height: 1)
-        } else if model.awaitingForceQuit.contains(key) {
+        if model.awaitingForceQuit.contains(key) {
             Button("Force Quit", role: .destructive) { model.forceQuit(key: key) }.controlSize(.small)
                 .accessibilityLabel("Force Quit \(assessment.group.name)")
         } else if model.quitting.contains(key) {
             QuittingLabel()
+        } else if case .protected = assessment.verdict {
+            if let g = model.grown[key] {
+                RestartButton(name: assessment.group.name, key: key, growth: g)
+            } else {
+                Color.clear.frame(height: 1)
+            }
         } else {
             HStack(spacing: 6) {
                 Button("Quit") { model.quit(key: key, source: "window") }

@@ -630,3 +630,106 @@ final class StaleDiskReportTests: XCTestCase {
         XCTAssertEqual(left.scannedAt, report.scannedAt)
     }
 }
+
+final class ForecastTests: XCTestCase {
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    let gb: Int64 = 1 << 30
+
+    func testForecastNeedsHalfADayOfHistory() {
+        var h = DiskHistory()
+        XCTAssertTrue(h.record(free: 50 * gb, at: t0))
+        XCTAssertFalse(h.record(free: 49 * gb, at: t0.addingTimeInterval(600)), "one sample per 30 minutes")
+        h.record(free: 48 * gb, at: t0.addingTimeInterval(6 * 3600))
+        XCTAssertNil(h.daysUntil(free: 10 * gb, now: t0.addingTimeInterval(6 * 3600)))
+    }
+
+    func testSteadyLossPredictsWhenTheDiskFills() {
+        var h = DiskHistory()
+        // Losing 4 GB a day for two days: 42 GB free, 10 GB floor → 8 days.
+        for hour in stride(from: 0, through: 48, by: 1) {
+            h.record(free: 50 * gb - Int64(Double(4 * gb) * Double(hour) / 24), at: t0.addingTimeInterval(Double(hour) * 3600))
+        }
+        let now = t0.addingTimeInterval(48 * 3600)
+        XCTAssertEqual(h.lossPerDay(now: now)! / Double(gb), 4, accuracy: 0.01)
+        XCTAssertEqual(h.daysUntil(free: 10 * gb, now: now)!, 8, accuracy: 0.05)
+        XCTAssertNil(h.daysUntil(free: 45 * gb, now: now), "already below the floor: the threshold alert's job")
+    }
+
+    func testFlatOrGrowingSpaceGivesNoForecast() {
+        var flat = DiskHistory(), growing = DiskHistory()
+        for hour in stride(from: 0, through: 24, by: 1) {
+            let at = t0.addingTimeInterval(Double(hour) * 3600)
+            flat.record(free: 50 * gb - Int64(hour % 2) * (100 << 20), at: at) // jitter, no trend
+            growing.record(free: 50 * gb + Int64(hour) * gb, at: at)
+        }
+        let now = t0.addingTimeInterval(24 * 3600)
+        XCTAssertNil(flat.daysUntil(free: 10 * gb, now: now))
+        XCTAssertNil(growing.daysUntil(free: 10 * gb, now: now))
+    }
+
+    func testHistorySurvivesARestartAndDropsOldSamples() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var h = DiskHistory()
+        h.record(free: 50 * gb, at: t0)
+        h.record(free: 40 * gb, at: t0.addingTimeInterval(15 * 86_400))
+        XCTAssertEqual(h.samples.count, 1, "two-week-old samples are dropped")
+        h.save(to: url)
+        XCTAssertEqual(DiskHistory(contentsOf: url), h)
+    }
+}
+
+final class MemoryGrowthTests: XCTestCase {
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    func chrome(_ gb: Double, pid: Int32 = 10) -> AppGroup {
+        AppGroup(id: "/Applications/Chrome.app", kind: .app, name: "Chrome", bundleID: "com.google.Chrome", bundlePath: "/Applications/Chrome.app",
+                 mainPID: pid, pids: [pid], memoryBytes: UInt64(gb * 1_073_741_824), cpuPercent: 0, hostedCommands: [], hostedCPUPercent: 0)
+    }
+    func at(minutes m: Double) -> Date { t0.addingTimeInterval(m * 60) }
+
+    func testAnAppThatSwellsIsFlaggedFromItsLowPoint() {
+        var m = MemoryGrowth()
+        m.record([chrome(1.2)], now: at(minutes: 0))
+        m.record([chrome(0.8)], now: at(minutes: 10))
+        m.record([chrome(3.5)], now: at(minutes: 40))
+        let g = m.growth(of: chrome(3.5), now: at(minutes: 40))
+        XCTAssertEqual(g?.from, UInt64(0.8 * 1_073_741_824))
+        XCTAssertEqual(g?.since, at(minutes: 10))
+        XCTAssertEqual(Double(g!.freed) / 1_073_741_824, 2.7, accuracy: 0.01)
+    }
+
+    func testSmallOrEarlyOrProportionalGrowthIsNot() {
+        var m = MemoryGrowth()
+        m.record([chrome(0.5)], now: at(minutes: 0))
+        XCTAssertNil(m.growth(of: chrome(2.5), now: at(minutes: 20)), "watched under 30 minutes")
+        XCTAssertNil(m.growth(of: chrome(1.2), now: at(minutes: 60)), "under 1 GB of growth")
+        var big = MemoryGrowth()
+        big.record([chrome(4)], now: at(minutes: 0))
+        XCTAssertNil(big.growth(of: chrome(5.5), now: at(minutes: 60)), "grew 1.5 GB but not to twice its size")
+    }
+
+    func testARestartStartsOverAndQuitAppsAreForgotten() {
+        var m = MemoryGrowth()
+        m.record([chrome(0.5)], now: at(minutes: 0))
+        m.record([chrome(3, pid: 20)], now: at(minutes: 40)) // relaunched: new main process
+        XCTAssertNil(m.growth(of: chrome(3, pid: 20), now: at(minutes: 41)))
+        m.record([], now: at(minutes: 50))
+        m.record([chrome(3, pid: 20)], now: at(minutes: 51))
+        XCTAssertNil(m.growth(of: chrome(3, pid: 20), now: at(minutes: 90)), "low point is 3 GB after it was forgotten")
+    }
+
+    func testMemoryAlertOffersARestartWhenNothingIdleIsWorthQuitting() {
+        let g = chrome(4)
+        let f = FeatureVector(bundleID: g.habitKey, memoryMB: g.memoryMB, cpuPercent: 0, minutesSinceActive: 1, foregroundMinutesToday: 30,
+                              avgDailyMinutes14d: 60, daysUsed14d: 10, launches7d: 3, hourOfDay: 12, isWeekend: 0,
+                              playingAudio: 0, timesKept: 0, timesQuit: 0)
+        let a = Assessment(group: g, features: f, score: 0.1, usedModel: false, verdict: .protected(.frontmost), cpuAverage: 0)
+        let s = SystemSnapshot(totalMemory: 16 << 30, usedMemory: 15 << 30)
+        let grown = ["com.google.Chrome": MemoryGrowth.Growth(from: 1 << 30, to: 4 << 30, since: t0)]
+        let alert = AlertRecommender.memory(s, [a], grown: grown)
+        XCTAssertEqual(alert.action, AlertAction(kind: .restart, target: "com.google.Chrome", label: "Restart Chrome"))
+        XCTAssertTrue(alert.body.contains("free about 3.22 GB"), alert.body)
+        XCTAssertNil(AlertRecommender.memory(s, [a]).action)
+    }
+}
+

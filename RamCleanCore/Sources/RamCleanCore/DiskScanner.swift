@@ -159,6 +159,9 @@ public struct DiskScanner {
         Known(path: ".npm/_cacache", name: "npm cache", reason: "Downloaded again when needed"),
         Known(path: ".gradle/caches", name: "Gradle cache", reason: "Downloaded again when needed"),
         Known(path: ".cargo/registry", name: "Cargo registry cache", reason: "Downloaded again when needed"),
+        Known(path: "Library/Containers/com.docker.docker/Data/vms", name: "Docker disk image",
+              reason: "Docker's images, containers and build cache. Free space inside it with: docker system prune -a (removes everything not in use), or Docker Desktop › Troubleshoot › Clean / Purge data. Lower its size limit under Settings › Resources",
+              caution: "Deleting the file itself erases every container, image and volume", canTrash: false),
     ]
 
     /// `progress` gets the step being scanned and everything found so far, so results can show as they arrive.

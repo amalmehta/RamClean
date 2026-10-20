@@ -18,11 +18,13 @@ cp -R build/DerivedData/Build/Products/Release/RamClean.app build/RamClean.app
 
 if [[ "${1:-}" == "--run" ]]; then
   running() { pgrep -f "RamClean.app/Contents/MacOS/RamClean" > /dev/null }
-  if running; then
-    osascript -e 'tell application id "com.amalmehta.RamClean" to quit'
-    for _ in {1..20}; do running || break; sleep 0.5; done
-    if running; then echo "RamClean didn't quit; quit it yourself and run: open build/RamClean.app" >&2; exit 1; fi
-  fi
+  # Each quit reaches one copy, so keep asking until none are left (a Debug build may be running too).
+  for _ in {1..20}; do
+    running || break
+    osascript -e 'tell application id "com.amalmehta.RamClean" to quit' > /dev/null 2>&1 || true
+    sleep 0.5
+  done
+  if running; then echo "RamClean didn't quit; quit it yourself and run: open build/RamClean.app" >&2; exit 1; fi
   open build/RamClean.app
   echo "Built and opened build/RamClean.app"
 else

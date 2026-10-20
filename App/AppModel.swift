@@ -210,7 +210,13 @@ final class AppModel: ObservableObject {
             habitStore.log(.stayedClosed, key: r.key, name: r.name,
                            detail: "Not reopened within \(Int(KillLabeler.regretWindow / 60)) min of RamClean \(r.forced ? "force quitting" : "quitting") it", at: now)
         case .neverQuit:
-            break
+            // You cancelled its save dialog, or it hung and you let it be: the "deadweight"
+            // answer recorded when you asked to quit it didn't turn out to be true.
+            habitStore.log(.neverQuit, key: r.key, name: r.name, detail: "Still open \(minutes) min after RamClean asked it to quit", at: now)
+            if model.removeLatest(key: r.key, since: r.killedAt.addingTimeInterval(-60), label: .deadweight) {
+                modelStatus = model.status
+                scheduleRetrain()
+            }
         }
         if KillLabeler.label(for: outcome) == .keep {
             model.relabelLatest(key: r.key, since: r.killedAt.addingTimeInterval(-60), to: .keep)

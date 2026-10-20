@@ -18,6 +18,8 @@ open build/RamClean.app
 
 The script generates `RamClean.xcodeproj` from `project.yml`, builds a Release copy and puts it at `build/RamClean.app`. Drag it into `/Applications` if you want to keep it there.
 
+To rebuild and swap in the new copy in one step, use `./scripts/build.sh --run`. It quits any RamClean that's running (including an older copy opened at login) and opens the new build. If the build fails, the script stops and leaves `build/RamClean.app` as it was.
+
 To work on it in Xcode instead, run `xcodegen generate` and open `RamClean.xcodeproj`.
 
 The first time it runs, macOS asks whether RamClean may send notifications. Click **Allow**, or suggestions can only appear in the window and the menu bar. You can change this later in System Settings → Notifications → RamClean.

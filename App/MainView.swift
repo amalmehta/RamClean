@@ -23,6 +23,7 @@ struct MainView: View {
         NavigationSplitView {
             List(SidebarItem.allCases, selection: $section) { s in
                 Label(s.rawValue, systemImage: s.symbol).tag(s)
+                    .help("\(s.rawValue) (⌘\(SidebarItem.allCases.firstIndex(of: s)! + 1))")
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 180)
             .safeAreaInset(edge: .bottom) {
@@ -48,10 +49,19 @@ struct MainView: View {
             .toolbar {
                 ToolbarItemGroup {
                     Button { StableOrder.overview.invalidate(); model.tick() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                        .help("Check now")
+                        .keyboardShortcut("r")
+                        .help("Check now (⌘R)")
                     SettingsLink { Label("Settings", systemImage: "gearshape") }
                         .help("Settings (⌘,)")
                 }
+            }
+        }
+        .background {
+            // ⌘1–⌘4 switch sections, like the sidebar.
+            ForEach(Array(SidebarItem.allCases.enumerated()), id: \.element) { i, item in
+                Button(item.rawValue) { section = item }
+                    .keyboardShortcut(KeyEquivalent(Character(String(i + 1))))
+                    .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
             }
         }
         .sheet(isPresented: $showFeedback) { FeedbackView() }

@@ -61,11 +61,31 @@ public final class DeadweightModel {
         refreshCounts()
     }
 
+    /// Appends one line to training.jsonl rather than rewriting the whole file.
     public func add(_ example: TrainingExample) {
         lock.lock(); defer { lock.unlock() }
         examples.append(example)
+        if var line = try? HabitStore.encoder.encode(example) {
+            line.append(0x0A)
+            if let h = try? FileHandle(forWritingTo: fileURL) {
+                h.seekToEndOfFile(); h.write(line); try? h.close()
+            } else {
+                try? line.write(to: fileURL)
+            }
+        }
+        refreshCounts()
+    }
+
+    /// The quit you answered never happened (you cancelled the app's save dialog, say), so
+    /// the "deadweight" answer recorded when you asked is taken back.
+    @discardableResult
+    public func removeLatest(key: String, since: Date, label: Label) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let i = examples.lastIndex(where: { $0.features.bundleID == key && $0.date >= since && $0.label == label }) else { return false }
+        examples.remove(at: i)
         persist()
         refreshCounts()
+        return true
     }
 
     /// You reopened an app RamClean quit: that answer was wrong, so flip it to "keep".

@@ -91,6 +91,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         n.body = content.body
         n.categoryIdentifier = content.action == nil ? Self.alertCategory : Self.fixCategory(content.resource)
         n.userInfo = info
+        n.threadIdentifier = Self.alertCategory
         n.sound = .default
         n.attachments = Self.attachments(Art(content.resource))
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "alert-\(content.resource.rawValue)", content: n, trigger: nil))
@@ -132,6 +133,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         content.title = title
         content.body = body
         content.categoryIdentifier = category
+        // Stack by kind in Notification Center, so a Quit all reads as one group of "Quit …".
+        content.threadIdentifier = category
         content.userInfo = ["key": key]
         content.sound = nil
         content.attachments = Self.attachments(art)

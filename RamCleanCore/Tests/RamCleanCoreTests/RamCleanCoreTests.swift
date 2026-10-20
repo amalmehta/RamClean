@@ -180,6 +180,28 @@ final class HabitAndScoreTests: XCTestCase {
         XCTAssertEqual(reopened.examples.count, 30)
         XCTAssertTrue(reopened.relabelLatest(key: "dead1", since: .distantPast, to: .keep))
         XCTAssertEqual(reopened.examples.last { $0.features.bundleID == "dead1" }?.label, .keep)
+
+        // A quit that never happened takes its "deadweight" answer back, and that sticks.
+        XCTAssertTrue(reopened.removeLatest(key: "dead2", since: .distantPast, label: .deadweight))
+        XCTAssertFalse(reopened.removeLatest(key: "dead2", since: Date().addingTimeInterval(60), label: .deadweight), "nothing that recent")
+        XCTAssertEqual(DeadweightModel(directory: dir).examples.count, 29)
+    }
+
+    func testOnlyAppsThatCouldBeSuggestedAskTheModel() {
+        func g(_ id: String, _ kind: GroupKind) -> AppGroup {
+            AppGroup(id: "/Applications/\(id).app", kind: kind, name: id, bundleID: kind == .app ? id : nil, bundlePath: "/Applications/\(id).app",
+                     mainPID: 1, pids: [1], memoryBytes: 1 << 30, cpuPercent: 0, hostedCommands: [], hostedCPUPercent: 0)
+        }
+        let idle = HabitStats(minutesSinceActive: 600, foregroundMinutesToday: 0, avgDailyMinutes14d: 0, daysUsed14d: 0,
+                              launches7d: 0, timesKept: 0, timesQuit: 0, regrets: 0, everActive: true)
+        var asked: [String] = []
+        let result = Assessor(prefs: Preferences(), frontmostKey: "front", selfBundleID: nil, audioPIDs: [], cpuAverages: [:], now: Date())
+            .assess([g("idle", .app), g("front", .app), g("helperd", .background)], stats: { _ in idle },
+                    score: { asked.append($0.bundleID); return (0.9, true) })
+        XCTAssertEqual(asked, ["idle"])
+        XCTAssertEqual(result.map(\.usedModel), [true, false, false])
+        XCTAssertEqual(result[0].verdict, .deadweight)
+        XCTAssertEqual(result[1].verdict, .protected(.frontmost))
     }
 }
 

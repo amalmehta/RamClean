@@ -24,7 +24,11 @@
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>RamClean asks apps you choose to quit, so they can save first.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Amal Mehta</string>
+	<key>SUPublicEDKey</key>
+	<string></string>
 </dict>
 </plist>

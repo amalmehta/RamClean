@@ -129,3 +129,41 @@ enum GrowthText {
     }
 }
 
+
+/// A small "Free trial: 5 days left" / "Trial ended" link to the Licence settings. Hidden once
+/// licensed, and in a development copy.
+struct LicenceBadge: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        switch model.licence {
+        case .licensed, .salesNotSetUp:
+            EmptyView()
+        default:
+            Button { model.showLicenceSettings() } label: {
+                Label(model.licence.title, systemImage: Self.symbol(model.licence)).font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(Self.tint(model.licence))
+            .help("Licence settings")
+        }
+    }
+
+    static func symbol(_ s: LicenceState) -> String {
+        switch s {
+        case .trial: return "clock"
+        case .licensed: return "checkmark.seal.fill"
+        case .offlineGrace: return "wifi.slash"
+        case .expired: return "lock.fill"
+        case .salesNotSetUp: return "hammer"
+        }
+    }
+
+    static func tint(_ s: LicenceState) -> Color {
+        switch s {
+        case .licensed: return .green
+        case .expired: return .orange
+        default: return .secondary
+        }
+    }
+}

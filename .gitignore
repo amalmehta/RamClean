@@ -6,3 +6,7 @@ xcuserdata/
 .DS_Store
 .swiftpm/
 .claude/
+
+# Release output for the website, uploaded with the site rather than committed (docs/GO-LIVE.md)
+site/download/
+site/updates/

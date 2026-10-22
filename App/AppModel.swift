@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CoreGraphics
 import RamCleanCore
+import SystemConfiguration
 
 /// The running brain of the app: samples every few seconds, keeps the habit log,
 /// scores apps, sends suggestions and carries out your answers.
@@ -30,6 +31,14 @@ final class AppModel: ObservableObject {
     @Published var requestedPanel: UsagePanel?
     /// Opens the main window; provided by a SwiftUI view that has `openWindow`.
     var openMainWindow: (() -> Void)?
+    /// Opens Settings; provided by a SwiftUI view that has `openSettings`.
+    var openSettings: (() -> Void)?
+    @Published var settingsTab: SettingsTab = .general
+    /// Trial, licensed, offline or expired. Watching always works; acting needs this to unlock.
+    @Published private(set) var licence: LicenceState = .salesNotSetUp
+    @Published private(set) var licenceRecord: LicenceRecord?
+    /// Why the licence was removed at the last check (refunded, deactivated elsewhere), if it was.
+    @Published var licenceProblem: String?
     @Published var prefs: Preferences {
         didSet {
             guard prefs != oldValue else { return }
@@ -46,6 +55,7 @@ final class AppModel: ObservableObject {
     /// Apps RamClean quit, followed for 30 minutes to learn whether you wanted them back.
     let kills: KillLedger
     let notifier = Notifier()
+    let licensing: Licensing
     /// Folder sizes remembered between disk scans (and app launches, via sizes.json), so
     /// refreshes only re-measure what changed.
     let sizeCache: SizeCache
@@ -73,6 +83,8 @@ final class AppModel: ObservableObject {
     private var diskAlertWaitingForScan = false
     private var observers: [NSObjectProtocol] = []
     private var started = false
+    private var checkingLicence = false
+    private var lastLicenceAlert = Date.distantPast
 
     private init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -80,6 +92,11 @@ final class AppModel: ObservableObject {
         habitStore = HabitStore(directory: dataDirectory)
         model = DeadweightModel(directory: dataDirectory)
         kills = KillLedger(directory: dataDirectory)
+        // Two copies of the trial clock and licence, so deleting preferences doesn't reset the trial.
+        licensing = Licensing(config: .ramClean,
+                              stores: [KeychainStore(service: "com.amalmehta.RamClean.licence"), DefaultsStore()],
+                              http: URLSessionHTTPClient(),
+                              instanceName: SCDynamicStoreCopyComputerName(nil, nil) as String? ?? "Mac")
         prefs = Self.loadPrefs()
         sizeCache = SizeCache(contentsOf: dataDirectory.appendingPathComponent("sizes.json"))
         diskHistory = DiskHistory(contentsOf: dataDirectory.appendingPathComponent("disk-history.json"))
@@ -90,6 +107,8 @@ final class AppModel: ObservableObject {
         }
         modelStatus = model.status
         events = habitStore.recentEvents
+        licence = licensing.state()
+        licenceRecord = licensing.record
     }
 
     func start() {
@@ -162,6 +181,7 @@ final class AppModel: ObservableObject {
             suggest(pick, system: snapshot, now: now)
         }
         checkThresholds(snapshot, result, now: now)
+        updateLicence()
     }
 
     /// Credits the frontmost app with the time since the last tick — but only while
@@ -355,7 +375,7 @@ final class AppModel: ObservableObject {
     /// thread, and the quit request goes out before any bookkeeping.
     func quit(key: String, source: String) {
         let apps = Self.runningApps(key)
-        guard !apps.isEmpty, !quitting.contains(key) else { return }
+        guard !apps.isEmpty, !quitting.contains(key), allowed("Quitting apps") else { return }
         let name = Self.name(apps[0])
         let pids = apps.map(\.processIdentifier), front = apps.contains(where: \.isActive)
         quitting.insert(key)
@@ -384,7 +404,7 @@ final class AppModel: ObservableObject {
     /// up. Unlike Quit, this isn't a "deadweight" answer, so nothing is learned from it.
     func restart(key: String) {
         let apps = Self.runningApps(key)
-        guard !apps.isEmpty, !quitting.contains(key) else { return }
+        guard !apps.isEmpty, !quitting.contains(key), allowed("Restarting apps") else { return }
         let name = Self.name(apps[0])
         let pids = apps.map(\.processIdentifier), front = apps.contains(where: \.isActive)
         let freed = grown[key]?.freed
@@ -529,10 +549,13 @@ final class AppModel: ObservableObject {
 
     func keep(key: String, always: Bool, source: String) {
         let name = assessments.first { $0.group.habitKey == key }?.group.name ?? habitStore.habits[key]?.name ?? key
-        record(key: key, label: .keep, source: source)
-        habitStore.recordDecision(always ? .alwaysKept : .kept, key: key, name: name, detail: "from \(source)", at: Date())
+        // "Always keep" is a protection setting and works without a licence; learning from it doesn't.
+        let learns = always ? licensing.state().unlocksActions : allowed("Learning from your answers")
         if always, !prefs.alwaysKeep.contains(key) { prefs.alwaysKeep.append(key) }
         lastNotified[key] = Date()
+        guard learns else { return }
+        record(key: key, label: .keep, source: source)
+        habitStore.recordDecision(always ? .alwaysKept : .kept, key: key, name: name, detail: "from \(source)", at: Date())
         refreshEvents()
     }
 
@@ -624,6 +647,7 @@ final class AppModel: ObservableObject {
     /// Moves an item to the Trash (recoverable until you empty it). Returns an error message on failure.
     func moveToTrash(_ item: DiskItem) -> String? {
         guard item.canTrash else { return "RamClean doesn't remove this one itself." }
+        guard allowed("Moving files to the Trash") else { return nil }
         do {
             try FileManager.default.trashItem(at: URL(fileURLWithPath: item.path), resultingItemURL: nil)
         } catch {
@@ -660,6 +684,7 @@ final class AppModel: ObservableObject {
     /// Moves a file off this Mac into `folder` (e.g. an external drive). It's copied, then
     /// removed here only once the copy succeeded. Calls back on the main thread with an error message or nil.
     func move(_ item: DiskItem, to folder: URL, done: @escaping (String?) -> Void) {
+        guard allowed("Moving files off this Mac") else { done(nil); return }
         let source = URL(fileURLWithPath: item.path)
         let free = (try? folder.resourceValues(forKeys: [.volumeAvailableCapacityKey]).volumeAvailableCapacity).flatMap { $0 }
         if let free, let size = item.bytes, Int64(free) < size + 100 * 1_048_576 {
@@ -691,6 +716,85 @@ final class AppModel: ObservableObject {
                 done(failure)
             }
         }
+    }
+
+    // MARK: - Licence
+
+    /// Watching and recommendations are free; acting needs the trial or a licence. When it's
+    /// locked, says so and offers to buy or enter a key (once, even for "Quit all").
+    private func allowed(_ action: String) -> Bool {
+        licence = licensing.state()
+        if licence.unlocksActions { return true }
+        guard Date().timeIntervalSince(lastLicenceAlert) > 2 else { return false }
+        let config = licensing.config
+        let alert = NSAlert()
+        alert.messageText = "\(action) needs a licence"
+        alert.informativeText = licence.detail(config)
+        alert.addButton(withTitle: "Buy \(config.name) – \(config.price)")
+        alert.addButton(withTitle: "Enter Licence Key…")
+        alert.addButton(withTitle: "Not Now")
+        NSApp.activate(ignoringOtherApps: true)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: buy()
+        case .alertSecondButtonReturn: showLicenceSettings()
+        default: break
+        }
+        lastLicenceAlert = Date()
+        return false
+    }
+
+    func buy() { NSWorkspace.shared.open(licensing.config.checkoutURL) }
+
+    func showLicenceSettings() {
+        settingsTab = .licence
+        openSettings?()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Called after every check: refreshes the state, and re-checks the key with Lemon Squeezy
+    /// when it's due (daily, or hourly while offline).
+    private func updateLicence() {
+        licence = licensing.state()
+        guard licensing.needsCheck(), !checkingLicence else { return }
+        Task { await checkLicence() }
+    }
+
+    func checkLicence() async {
+        checkingLicence = true
+        let problem = await licensing.refresh()
+        checkingLicence = false
+        if case .rejected(let why) = problem { licenceProblem = "Your licence was removed from this Mac: \(why)" }
+        licence = licensing.state()
+        licenceRecord = licensing.record
+    }
+
+    /// Returns an error message, or nil once the key is active on this Mac.
+    func activateLicence(_ key: String) async -> String? {
+        defer { licence = licensing.state(); licenceRecord = licensing.record }
+        do {
+            try await licensing.activate(key: key)
+            licenceProblem = nil
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    func deactivateLicence() async -> String? {
+        defer { licence = licensing.state(); licenceRecord = licensing.record }
+        do {
+            try await licensing.deactivate()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Removes the key from this Mac without telling the server (for when it can't be reached).
+    func forgetLicence() {
+        licensing.forget()
+        licence = licensing.state()
+        licenceRecord = nil
     }
 
     func resetModel() {

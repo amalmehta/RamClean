@@ -6,6 +6,10 @@ options:
 packages:
   RamCleanCore:
     path: RamCleanCore
+  # Auto-updates. The feed URL is in ProductConfig.swift; the public key is SUPublicEDKey below.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: "2.10.0"
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -17,6 +21,7 @@ targets:
     sources: [App]
     dependencies:
       - package: RamCleanCore
+      - package: Sparkle
     info:
       path: App/Info.plist
       properties:
@@ -26,13 +31,19 @@ targets:
         LSApplicationCategoryType: public.app-category.utilities
         LSMinimumSystemVersion: "14.0"
         NSHumanReadableCopyright: "© 2026 Amal Mehta"
+        NSAppleEventsUsageDescription: RamClean asks apps you choose to quit, so they can save first.
+        # Sparkle's EdDSA public key, printed by generate_keys (docs/GO-LIVE.md). Updates stay off while it's empty.
+        SUPublicEDKey: ""
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.amalmehta.RamClean
         PRODUCT_NAME: RamClean
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Ad-hoc signed for local builds; scripts/release.sh signs with Developer ID and turns on
+        # the hardened runtime that notarization needs.
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Manual
+        CODE_SIGN_ENTITLEMENTS: App/RamClean.entitlements
         ENABLE_HARDENED_RUNTIME: NO
         GENERATE_INFOPLIST_FILE: NO
         COMBINE_HIDPI_IMAGES: YES

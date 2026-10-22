@@ -27,12 +27,15 @@ struct MainView: View {
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 180)
             .safeAreaInset(edge: .bottom) {
-                // Small, out-of-the-way feedback tab.
-                Button { showFeedback = true } label: {
-                    Label("Feedback", systemImage: "bubble.left").font(.caption)
+                // Small, out-of-the-way feedback tab, under the trial status while there is one.
+                VStack(alignment: .leading, spacing: 8) {
+                    LicenceBadge()
+                    Button { showFeedback = true } label: {
+                        Label("Feedback", systemImage: "bubble.left").font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
             }

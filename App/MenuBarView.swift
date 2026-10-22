@@ -42,6 +42,7 @@ struct MenuBarView: View {
                 .help("Quits every app RamClean thinks is deadweight, including any not shown above")
             }
             Divider()
+            LicenceBadge()
             HStack {
                 Button("Open RamClean") {
                     openWindow(id: "main")

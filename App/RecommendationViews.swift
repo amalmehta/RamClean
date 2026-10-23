@@ -63,6 +63,7 @@ struct RecommendationRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(g.name).font(.body.weight(.medium)).lineLimit(1)
+                    if let work = assessment.activeWork { BusyBadge(work: work) }
                     Text(panel == .cpu ? "\(Int(assessment.cpuAverage.rounded()))% CPU" : Format.bytes(g.memoryBytes))
                         .font(.callout).monospacedDigit().foregroundStyle(.secondary)
                 }

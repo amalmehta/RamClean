@@ -190,7 +190,10 @@ struct AppRow: View {
         HStack(spacing: 12) {
             AppIcon(path: g.bundlePath)
             VStack(alignment: .leading, spacing: 2) {
-                Text(g.name).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(g.name).lineLimit(1)
+                    if let work = assessment.activeWork { BusyBadge(work: work) }
+                }
                 Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(subtitle)
             }
             Spacer(minLength: 12)

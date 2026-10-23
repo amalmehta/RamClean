@@ -9,7 +9,8 @@ public enum ProtectionReason: Equatable, Sendable {
     case recentlyUsed(minutes: Int)
     /// RamClean hasn't watched long enough to know whether you use it.
     case learning(minutes: Int)
-    case playingAudio
+    /// In the middle of something: building, running an agent, playing sound, keeping the Mac awake.
+    case busy(ActiveWorkReason)
     case busyWork(cpu: Int)
     case hostsCommandLine([String])
     case menuBarUtility
@@ -24,7 +25,7 @@ public enum ProtectionReason: Equatable, Sendable {
         case .frontmost: return "You're using it now"
         case .recentlyUsed(let m): return m <= 1 ? "Used a minute ago" : "Used \(m) min ago"
         case .learning(let m): return "Still learning (watched \(m) min)"
-        case .playingAudio: return "Playing audio"
+        case .busy(let r): return r.text
         case .busyWork(let cpu): return "Working (\(cpu)% CPU)"
         case .hostsCommandLine(let names): return "Running \(names.prefix(3).joined(separator: ", ")) in a terminal"
         case .menuBarUtility: return "Menu bar or background app"
@@ -38,15 +39,16 @@ public struct ProtectionContext {
     public var prefs: Preferences
     public var frontmostKey: String?
     public var selfBundleID: String?
-    public var audioPIDs: Set<Int32>
+    /// What the active-work check found for this app on the last sample, if anything.
+    public var activeWork: ActiveWorkReason?
     public var cpuAverage: Double
     public var minutesSinceActive: Double
     public var everActive: Bool
 
-    public init(prefs: Preferences, frontmostKey: String?, selfBundleID: String?, audioPIDs: Set<Int32>,
+    public init(prefs: Preferences, frontmostKey: String?, selfBundleID: String?, activeWork: ActiveWorkReason? = nil,
                 cpuAverage: Double, minutesSinceActive: Double, everActive: Bool = true) {
         self.prefs = prefs; self.frontmostKey = frontmostKey; self.selfBundleID = selfBundleID
-        self.audioPIDs = audioPIDs; self.cpuAverage = cpuAverage; self.minutesSinceActive = minutesSinceActive
+        self.activeWork = activeWork; self.cpuAverage = cpuAverage; self.minutesSinceActive = minutesSinceActive
         self.everActive = everActive
     }
 }
@@ -72,8 +74,9 @@ public enum ProtectionRules {
         }
         if let p = g.bundlePath, systemPathPrefixes.contains(where: p.hasPrefix) { return .system }
         if c.prefs.matches(c.prefs.alwaysKeep, g.bundleID) { return .alwaysKeep }
+        // Ahead of "you're using it now", so the window says what it's busy with.
+        if let work = c.activeWork { return .busy(work) }
         if g.habitKey == c.frontmostKey { return .frontmost }
-        if g.pids.contains(where: c.audioPIDs.contains) { return .playingAudio }
         if !g.hostedCommands.isEmpty { return .hostsCommandLine(g.hostedCommands) }
         if c.prefs.protectBusyWorkTools, c.prefs.matches(c.prefs.workTools, g.bundleID),
            c.cpuAverage >= c.prefs.busyCPUPercent {

@@ -31,13 +31,15 @@ public struct Assessor {
     public var frontmostKey: String?
     public var selfBundleID: String?
     public var audioPIDs: Set<Int32>
+    /// Busy apps by group id, from `ActiveWork` on the sampling queue.
+    public var activeWork: [String: ActiveWorkReason]
     public var cpuAverages: [String: Double]
     public var now: Date
 
     public init(prefs: Preferences, frontmostKey: String?, selfBundleID: String?, audioPIDs: Set<Int32>,
-                cpuAverages: [String: Double], now: Date) {
+                activeWork: [String: ActiveWorkReason] = [:], cpuAverages: [String: Double], now: Date) {
         self.prefs = prefs; self.frontmostKey = frontmostKey; self.selfBundleID = selfBundleID
-        self.audioPIDs = audioPIDs; self.cpuAverages = cpuAverages; self.now = now
+        self.audioPIDs = audioPIDs; self.activeWork = activeWork; self.cpuAverages = cpuAverages; self.now = now
     }
 
     public func assess(_ groups: [AppGroup], stats: (String) -> HabitStats,
@@ -45,10 +47,11 @@ public struct Assessor {
         groups.map { g in
             let s = stats(g.habitKey)
             let cpu = cpuAverages[g.id] ?? (g.cpuPercent + g.hostedCPUPercent)
-            let playing = g.pids.contains(where: audioPIDs.contains)
+            let work = activeWork[g.id]
+            let playing = work == .playingAudio || g.pids.contains(where: audioPIDs.contains)
             let f = FeatureVector.make(group: g, stats: s, cpuAverage: cpu, playingAudio: playing, now: now)
             let ctx = ProtectionContext(prefs: prefs, frontmostKey: frontmostKey, selfBundleID: selfBundleID,
-                                        audioPIDs: audioPIDs, cpuAverage: cpu, minutesSinceActive: s.minutesSinceActive,
+                                        activeWork: work, cpuAverage: cpu, minutesSinceActive: s.minutesSinceActive,
                                         everActive: s.everActive)
             let reason = ProtectionRules.reason(for: g, ctx)
             // Only apps that could be suggested need the model: a prediction for each of the

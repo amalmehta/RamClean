@@ -94,7 +94,8 @@ While a resource stays over its line, you're reminded at most once an hour. Afte
 
 - **Deadweight NN%** (orange). RamClean thinks you could quit it.
 - **Keep · NN%** (green). Not idle enough or used often enough to suggest.
-- **Lock + reason** (gray). Protected and never suggested: you're using it, it's playing audio, it's running a command in a terminal (like `claude`), it's a busy work tool, it's on your always-keep list, it's part of macOS, or RamClean is still learning about it.
+- **Busy** (blue tag by the name, with the reason). Never suggested while it lasts: it's building (a compiler or bundler is working under it), Claude Code inside it is running tasks, it's playing audio, or it's keeping the Mac awake. It stays busy for 2 minutes after the last sign, and any "Quit?" notification about it is taken back.
+- **Lock + reason** (gray). Protected and never suggested: you're using it, it's running a command in a terminal (like `claude`), it's a busy work tool, it's on your always-keep list, it's part of macOS, or RamClean is still learning about it.
 
 **Quit** asks the app to quit politely. If it's still running after 8 seconds (you can change this), RamClean offers **Force Quit**. The 👍 button means "keep this". Both buttons are answers the model learns from.
 

@@ -68,15 +68,15 @@ final class ProtectionTests: XCTestCase {
         AppGroup(id: path, kind: kind, name: id, bundleID: id, bundlePath: path, mainPID: pids.first, pids: pids,
                  memoryBytes: 1 << 30, cpuPercent: 0, hostedCommands: hosted, hostedCPUPercent: 0)
     }
-    func ctx(_ prefs: Preferences = Preferences(), front: String? = nil, audio: Set<Int32> = [], cpu: Double = 0, idle: Double = 600) -> ProtectionContext {
-        ProtectionContext(prefs: prefs, frontmostKey: front, selfBundleID: "com.amalmehta.RamClean", audioPIDs: audio, cpuAverage: cpu, minutesSinceActive: idle)
+    func ctx(_ prefs: Preferences = Preferences(), front: String? = nil, work: ActiveWorkReason? = nil, cpu: Double = 0, idle: Double = 600) -> ProtectionContext {
+        ProtectionContext(prefs: prefs, frontmostKey: front, selfBundleID: "com.amalmehta.RamClean", activeWork: work, cpuAverage: cpu, minutesSinceActive: idle)
     }
 
     func testIdleAppIsNotProtected() {
         XCTAssertNil(ProtectionRules.reason(for: group("com.spotify.client"), ctx()))
     }
     func testSpotifyPlayingIsProtected() {
-        XCTAssertEqual(ProtectionRules.reason(for: group("com.spotify.client", pids: [5, 6]), ctx(audio: [6])), .playingAudio)
+        XCTAssertEqual(ProtectionRules.reason(for: group("com.spotify.client", pids: [5, 6]), ctx(work: .playingAudio)), .busy(.playingAudio))
     }
     func testTerminalRunningClaudeIsProtected() {
         XCTAssertEqual(ProtectionRules.reason(for: group("com.apple.Terminal", hosted: ["claude"]), ctx()), .hostsCommandLine(["claude"]))
@@ -470,7 +470,7 @@ final class RecommendationTests: XCTestCase {
                               playingAudio: 0, timesKept: 0, timesQuit: 2)
         let a = Assessment(group: g, features: f, score: 0.9, usedModel: false, verdict: .deadweight, cpuAverage: 12)
         XCTAssertEqual(a.reasons, ["Idle 3 h", "Rarely used (1 of 14 days)", "12% CPU", "You quit it 2× before"])
-        var p = a; p.verdict = .protected(.playingAudio)
+        var p = a; p.verdict = .protected(.busy(.playingAudio))
         XCTAssertEqual(p.reasons.first, "Playing audio")
         var r = a; r.verdict = .protected(.recentlyUsed(minutes: 16))
         XCTAssertEqual(r.reasons, ["Used 16 min ago", "Rarely used (1 of 14 days)", "12% CPU", "You quit it 2× before"])

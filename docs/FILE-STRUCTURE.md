@@ -30,6 +30,7 @@ RamClean/
 │   ├── Sources/RamCleanCore/
 │   │   ├── ProcessSampler.swift  Per-process memory, CPU and terminal info (libproc)
 │   │   ├── SystemSampler.swift   Memory, pressure, swap, CPU, disk
+│   │   ├── ActiveWork.swift      Busy check: builds, Claude Code, audio, sleep assertions
 │   │   ├── AudioActivity.swift   Which processes are playing audio
 │   │   ├── AppGrouper.swift      Helpers → apps; terminal work → hosting app
 │   │   ├── Preferences.swift     Every setting and its default

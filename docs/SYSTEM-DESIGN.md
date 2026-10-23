@@ -53,6 +53,7 @@ flowchart TB
 | `ProcessSampler` | Lists every PID with `proc_listallpids`. For each one it reads `proc_pidinfo` (parent, uid, name, whether it has a terminal) and `proc_pid_rusage` (physical footprint, the same "Memory" number Activity Monitor shows; CPU time). CPU % is the CPU-time delta between samples. Processes owned by other users can't be read and are skipped. |
 | `SystemSampler` | Memory used (app + wired + compressed, matching Activity Monitor), `kern.memorystatus_vm_pressure_level`, `vm.swapusage`, total CPU from host tick deltas, and free disk from `volumeAvailableCapacityForImportantUsage`. |
 | `AudioActivity` | Reads Core Audio's process objects (macOS 14+) and returns the PIDs currently playing audio. |
+| `ActiveWork` | The active-work check, run once per sample on the sampling queue. Walks each app's process tree (its own processes and everything started under them) and calls it busy when a build tool there is working (compilers, `swift-frontend`, `xcodebuild`, `cargo`, `node` and the like at ≥ 10% CPU, or `docker-buildx` at any CPU), when a `claude` process in it has a child at ≥ 3% CPU, when it plays audio (Core Audio, plus `audio-out` assertions from `pmset -g assertions`), or when it holds a sleep-prevention assertion. `ActiveWorkTracker` keeps an app busy for 2 minutes after the last sign, so the gaps between compile steps or songs don't count. |
 | `AppGrouper` | Folds helpers into their app using the outermost `.app` in the executable path (every "Chrome Helper" becomes Chrome). Classifies each group as a Dock app, menu bar app, command-line tool or background process. For each non-shell terminal process (e.g. `claude`), it walks up the parent chain to the app hosting it (Terminal, iTerm, VS Code…) and records it as hosted work. |
 | `HabitStore` | The habit log. It records time each app spends in front, per day, launches, when each app was last active, and your answer counts. It also appends a JSON-lines event diary. |
 | `ProtectionRules` | Hard "never suggest" rules, checked before any score (see below). |
@@ -86,7 +87,7 @@ flowchart TB
 4. `SuggestionPolicy.pick` runs. If it returns an app, `Notifier` sends "Quit X?" and the event is logged.
 5. The disk check runs, with at most one warning a day.
 
-**Protection order** (first match wins): command-line tool → background process → menu bar app (unless included) → RamClean itself → macOS system app or path → always-keep list → frontmost → playing audio → hosting terminal work (e.g. `claude` in Terminal) → busy work tool (average CPU ≥ 15%) → used within 20 minutes (shown as "still learning" if RamClean has never seen the app in front).
+**Protection order** (first match wins): command-line tool → background process → menu bar app (unless included) → RamClean itself → macOS system app or path → always-keep list → busy (active-work check: building, Claude Code running tasks, playing audio, keeping the Mac awake) → frontmost → hosting terminal work (e.g. `claude` in Terminal) → busy work tool (average CPU ≥ 15%) → used within 20 minutes (shown as "still learning" if RamClean has never seen the app in front).
 
 **Answer → learning:**
 - **Quit:** records a `deadweight` example with the app's current features, logs it, calls `terminate()`, and offers Force Quit if the app is still running after N seconds.
@@ -185,7 +186,9 @@ Expired copies keep sampling, scoring, recommending and alerting. Quitting and r
 
 - Only processes owned by your user are measured; root daemons are invisible without privileges.
 - Footprint memory double-counts nothing, but shared memory isn't split. An app's number is what quitting it roughly frees, not an exact figure.
-- "Playing audio" depends on Core Audio's process list. Apps that play audio through a separate system process might not be detected.
+- "Playing audio" depends on Core Audio's process list and coreaudiod's power assertions. Apps that play audio some other way might not be detected.
+- "Keeping the Mac awake" trusts the app's assertion. Some apps hold one for as long as they run (Electron apps can hold `NoIdleSleepAssertion` for days), so those are never suggested while they do.
+- A process that starts and exits between two samples is never seen. New processes get their average CPU over their short life, and busy apps stay busy for 2 minutes, which covers most builds.
 - Idle detection uses system-wide input, so time in front is credited while you're at the Mac even if you're only reading.
 - The notification's fix-button label is shared by all alert notifications, so if two alerts with fixes are on screen, the older one's button shows the newer label. Tapping it still acts on its own app or cache.
 - Folders named `build`, `dist` or `target` aren't searched for large files, even outside code projects.

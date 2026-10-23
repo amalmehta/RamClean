@@ -79,13 +79,47 @@ struct VerdictBadge: View {
         switch assessment.verdict {
         case .deadweight: return ("Deadweight \(Int(assessment.score * 100))%", .orange, "moon.zzz.fill")
         case .keep: return ("Keep · \(Int(assessment.score * 100))%", .green, "checkmark.circle.fill")
+        case .protected(.busy(let work)): return (work.text, .blue, BusyBadge.symbol(work))
         case .protected(let reason): return (reason.text, .secondary, "lock.fill")
         }
     }
 
     private var help: String {
+        if case .protected(.busy(let work)) = assessment.verdict { return "Not suggested while it's busy. \(work.detail)" }
         let source = assessment.usedModel ? "rules of thumb blended with your trained model" : "rules of thumb (model not trained yet)"
         return "Deadweight score \(Int(assessment.score * 100))% from \(source)."
+    }
+}
+
+/// The small "Busy" tag on an app the active-work check is holding back from suggestions.
+struct BusyBadge: View {
+    var work: ActiveWorkReason
+
+    var body: some View {
+        Text("Busy")
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(Color.blue.opacity(0.15), in: Capsule())
+            .foregroundStyle(.blue)
+            .help("\(work.text). \(work.detail) RamClean won't suggest quitting it until it's done.")
+            .accessibilityLabel("Busy: \(work.text)")
+    }
+
+    static func symbol(_ work: ActiveWorkReason) -> String {
+        switch work {
+        case .building: return "hammer.fill"
+        case .agentRunning: return "terminal.fill"
+        case .playingAudio: return "speaker.wave.2.fill"
+        case .preventingSleep: return "cup.and.saucer.fill"
+        }
+    }
+}
+
+extension Assessment {
+    /// What the active-work check found, when that's why it isn't suggested.
+    var activeWork: ActiveWorkReason? {
+        if case .protected(.busy(let work)) = verdict { return work }
+        return nil
     }
 }
 

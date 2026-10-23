@@ -66,6 +66,8 @@ final class AppModel: ObservableObject {
 
     private let processSampler = ProcessSampler()
     private let systemSampler = SystemSampler()
+    /// Lives on `samplingQueue` with the samplers.
+    private let activeWork = ActiveWorkTracker()
     private var cpuHistory = CPUHistory()
     private var memoryGrowth = MemoryGrowth()
     private var diskHistory: DiskHistory
@@ -152,27 +154,38 @@ final class AppModel: ObservableObject {
             RunningAppInfo(pid: $0.processIdentifier, bundleID: $0.bundleIdentifier, name: $0.localizedName ?? "",
                            bundlePath: $0.bundleURL?.path, isRegular: $0.activationPolicy == .regular)
         }
-        let systemSampler = systemSampler, processSampler = processSampler
+        let systemSampler = systemSampler, processSampler = processSampler, activeWork = activeWork
         samplingQueue.async {
             let snapshot = systemSampler.sample()
-            let groups = AppGrouper.group(processSampler.sample(), apps: running)
+            let processes = processSampler.sample()
+            let groups = AppGrouper.group(processes, apps: running)
             let audio = AudioActivity.pidsPlayingAudio()
-            Task { @MainActor in self.assess(snapshot, groups, audio: audio) }
+            // Which apps are mid-build, running an agent, playing sound or keeping the Mac awake:
+            // worked out here, once per check, so judging on the main thread only looks it up.
+            let busy = activeWork.update(groups: groups, processes: processes, assertions: PowerAssertions.read(),
+                                         audioPIDs: audio, now: Date())
+            Task { @MainActor in self.assess(snapshot, groups, audio: audio, busy: busy) }
         }
     }
 
-    private func assess(_ snapshot: SystemSnapshot, _ groups: [AppGroup], audio: Set<Int32>) {
+    private func assess(_ snapshot: SystemSnapshot, _ groups: [AppGroup], audio: Set<Int32>, busy: [String: ActiveWorkReason]) {
         sampling = false
         let now = Date()
         creditForeground(now: now)
         let averages = cpuHistory.record(groups)
         let assessor = Assessor(prefs: prefs, frontmostKey: frontmost?.key, selfBundleID: Bundle.main.bundleIdentifier,
-                                audioPIDs: audio, cpuAverages: averages, now: now)
+                                audioPIDs: audio, activeWork: busy, cpuAverages: averages, now: now)
         let store = habitStore, model = model
         let result = assessor.assess(groups, stats: { store.stats(for: $0, now: now) }, score: { model.score($0) })
 
         system = snapshot
         assessments = result
+        // A "Quit?" already on screen is wrong once the app gets busy: take it back.
+        let busyKeys = result.compactMap { a -> String? in
+            guard case .protected(.busy) = a.verdict, lastNotified[a.group.habitKey] != nil else { return nil }
+            return a.group.habitKey
+        }
+        if !busyKeys.isEmpty { notifier.withdraw(busyKeys.map { "suggest-\($0)" }) }
         memoryGrowth.record(groups, now: now)
         grown = Dictionary(groups.compactMap { g in memoryGrowth.growth(of: g, now: now).map { (g.habitKey, $0) } },
                            uniquingKeysWith: { a, _ in a })

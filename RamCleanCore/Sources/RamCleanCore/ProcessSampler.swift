@@ -9,7 +9,9 @@ public struct ProcessSnapshot: Sendable, Equatable {
     public var name: String
     public var path: String
     public var footprintBytes: UInt64
-    /// Percent of one core used since the previous sample (0 on the first sample).
+    /// Percent of one core used since the previous sample (0 on the first sample). A process
+    /// started since then gets its average over its short life, so a compile step that began
+    /// a few seconds ago doesn't read as idle.
     public var cpuPercent: Double
     /// True when the process has a controlling terminal (it was started from a shell).
     public var hasTTY: Bool
@@ -40,6 +42,7 @@ public final class ProcessSampler {
     public func sample() -> [ProcessSnapshot] {
         let now = DispatchTime.now().uptimeNanoseconds
         let elapsed = lastSampleNs == 0 ? 0 : now - lastSampleNs
+        let wallNow = Date().timeIntervalSince1970
         lastSampleNs = now
 
         let estimate = proc_listallpids(nil, 0)
@@ -77,6 +80,9 @@ public final class ProcessSampler {
             var cpuPercent = 0.0
             if elapsed > 0, let prev = lastCPU[pid], prev.start == bsd.pbi_start_tvsec, cpuNs >= prev.cpuNs {
                 cpuPercent = Double(cpuNs - prev.cpuNs) / Double(elapsed) * 100
+            } else if elapsed > 0 {
+                let age = wallNow - (Double(bsd.pbi_start_tvsec) + Double(bsd.pbi_start_tvusec) / 1_000_000)
+                if age >= 0.5, age <= Double(elapsed) / 1e9 + 1 { cpuPercent = Double(cpuNs) / 1e9 / age * 100 }
             }
             marks[pid] = CPUMark(start: bsd.pbi_start_tvsec, cpuNs: cpuNs)
 

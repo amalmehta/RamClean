@@ -30,7 +30,7 @@ final class LicensingTests: XCTestCase {
     var keychain = MemoryStore(), defaults = MemoryStore()
     var http = FakeHTTP()
 
-    let config = ProductConfig(name: "RamClean", price: "$14.99", trialDays: 14, offlineGraceDays: 14, recheckHours: 24,
+    let config = ProductConfig(name: "RamClean", price: "$5", trialDays: 14, offlineGraceDays: 14, recheckHours: 24,
                                checkoutURL: URL(string: "https://shop.example.com/buy/1")!,
                                websiteURL: URL(string: "https://example.com")!,
                                appcastURL: URL(string: "https://example.com/appcast.xml")!,
@@ -181,7 +181,7 @@ final class LicensingTests: XCTestCase {
 
     func testStateTextAndFormEncoding() {
         XCTAssertEqual(LicenceState.trial(daysLeft: 1).title, "Free trial: 1 day left")
-        XCTAssertTrue(LicenceState.expired(.trialOver).detail(config).contains("$14.99"))
+        XCTAssertTrue(LicenceState.expired(.trialOver).detail(config).contains("$5"))
         XCTAssertEqual(LemonSqueezyClient.formEncode(["license_key": "A+B C", "instance_name": "Amal's Mac"]),
                        "instance_name=Amal%27s%20Mac&license_key=A%2BB%20C")
         XCTAssertEqual(LicenceRecord(key: "38b1460a-5104-4067-a91d-77b872934d51", instanceID: "", activatedAt: t0, lastValidated: t0).maskedKey,

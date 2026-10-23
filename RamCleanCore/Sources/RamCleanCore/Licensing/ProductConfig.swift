@@ -41,7 +41,7 @@ public struct ProductConfig: Sendable {
 
     public static let ramClean = ProductConfig(
         name: "RamClean",
-        price: "$14.99",
+        price: "$5",
         trialDays: 14,
         offlineGraceDays: 14,
         recheckHours: 24,

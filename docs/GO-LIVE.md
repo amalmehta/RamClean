@@ -60,7 +60,7 @@ Lemon Squeezy is the merchant of record: it sells RamClean on your behalf, charg
 2. Turn on **Test mode** (toggle at the bottom left) to set everything up without real money.
 3. **Products → + New Product**:
    - Name: RamClean. Description: copy from `site/index.html`.
-   - Pricing: **Single payment**, **$14.99** (or whatever you choose; see "Changing the defaults" below).
+   - Pricing: **Single payment**, **$5** (or whatever you choose; see "Changing the defaults" below).
    - Tax category: digital goods / software.
    - Files: optional. Buyers download the trial from your site and unlock it, so a file isn't needed.
    - **Generate license keys: on.** Activation limit: **3** (Macs per purchase; your choice). License length: **unlimited**.
@@ -152,7 +152,7 @@ All in [`ProductConfig.swift`](../RamCleanCore/Sources/RamCleanCore/Licensing/Pr
 
 | Setting | Default | Also change |
 |---|---|---|
-| `price` | `$14.99` | the Lemon Squeezy product price; `site/index.html` |
+| `price` | `$5` | the Lemon Squeezy product price; `site/index.html` |
 | `trialDays` | 14 | `site/index.html`, `site/terms.html`, `site/refund.html` |
 | `offlineGraceDays` | 14 | `site/terms.html` |
 | `recheckHours` | 24 (how often a licensed copy re-checks its key) | `site/privacy.html` if it's no longer "about once a day" |

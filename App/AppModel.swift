@@ -35,6 +35,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var cleaningPaths: Set<String> = []
     /// Set by "Show recommendations" on an alert; the Overview opens that bar's list.
     @Published var requestedPanel: UsagePanel?
+    /// Set by tapping the weekly summary notification; the main window switches to that section.
+    @Published var requestedSection: SidebarItem?
     /// Opens the main window; provided by a SwiftUI view that has `openWindow`.
     var openMainWindow: (() -> Void)?
     /// Opens Settings; provided by a SwiftUI view that has `openSettings`.
@@ -203,6 +205,7 @@ final class AppModel: ObservableObject {
 
         if pausedUntil.map({ $0 <= now }) ?? false { resumeNotifications() }
         guard !notificationsPaused else { return }
+        checkWeeklySummary(now: now)
         let policy = SuggestionPolicy(prefs: prefs)
         if let pick = policy.pick(from: result, system: snapshot, lastNotified: lastNotified,
                                   lastAnyNotification: lastAnyNotification, now: now) {
@@ -338,7 +341,15 @@ final class AppModel: ObservableObject {
                 refreshEvents()
             }
         case .open:
-            if let resource { showRecommendations(resource) } else { NSApp.activate(ignoringOtherApps: true) }
+            if let resource {
+                showRecommendations(resource)
+            } else if key == Notifier.weeklyKey {
+                openMainWindow?()
+                NSApp.activate(ignoringOtherApps: true)
+                requestedSection = .thisWeek
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
     }
 
@@ -426,10 +437,10 @@ final class AppModel: ObservableObject {
             apps.forEach { $0.terminate() }
 
             let now = Date()
-            kills.recordKill(KillRecord(key: key, name: name, killedAt: now, source: source,
-                                        memoryBytes: assessments.first { $0.group.habitKey == key }?.group.memoryBytes))
+            let memory = assessments.first { $0.group.habitKey == key }?.group.memoryBytes
+            kills.recordKill(KillRecord(key: key, name: name, killedAt: now, source: source, memoryBytes: memory))
             record(key: key, label: .deadweight, source: source)
-            habitStore.recordDecision(.quitBySuggestion, key: key, name: name, detail: "from \(source)", at: now)
+            habitStore.recordDecision(.quitBySuggestion, key: key, name: name, detail: "from \(source)", bytes: memory, at: now)
             refreshEvents()
             watchQuit(key: key, name: name, pids: pids)
         }
@@ -705,7 +716,7 @@ final class AppModel: ObservableObject {
         }
         habitStore.log(.movedToTrash, key: "disk", name: item.name,
                        detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) · \(item.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))",
-                       at: Date())
+                       bytes: UInt64(max(0, item.bytes ?? 0)), at: Date())
         diskReport?.items.removeAll { $0.id == item.id }
         saveDiskReport()
         refreshEvents()
@@ -738,7 +749,8 @@ final class AppModel: ObservableObject {
                 self.cleaningPaths.remove(item.path)
                 if failure == nil {
                     self.habitStore.log(.cleanedUp, key: "disk", name: item.name,
-                                        detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) · \(text)", at: Date())
+                                        detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) · \(text)",
+                                        bytes: UInt64(max(0, item.bytes ?? 0)), at: Date())
                     self.diskReport?.items.removeAll { $0.id == item.id }
                     self.saveDiskReport()
                     self.refreshEvents()
@@ -793,7 +805,8 @@ final class AppModel: ObservableObject {
                 self.movingPaths.remove(item.path)
                 if failure == nil {
                     self.habitStore.log(.movedOffMac, key: "disk", name: item.name,
-                                        detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) → \(target.path)", at: Date())
+                                        detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) → \(target.path)",
+                                        bytes: UInt64(max(0, item.bytes ?? 0)), at: Date())
                     self.diskReport?.items.removeAll { $0.id == item.id }
                     self.saveDiskReport()
                     self.refreshEvents()
@@ -881,6 +894,49 @@ final class AppModel: ObservableObject {
         licensing.forget()
         licence = licensing.state()
         licenceRecord = nil
+    }
+
+    /// "Wrong? Reset this app": forgets every answer about it, here and in the model, so it is
+    /// judged by rules of thumb again and relearned from your next answers.
+    func resetApp(key: String, name: String) {
+        let dropped = model.forget(key: key)
+        habitStore.forget(key: key, name: name, at: Date())
+        habitStore.save()
+        modelStatus = model.status
+        refreshEvents()
+        if dropped > 0 { retrain() }
+    }
+
+    // MARK: - This week
+
+    /// Adds up a week of the habit log. Reads the whole events file, so it runs off the main thread.
+    func weeklySummary(_ interval: DateInterval) async -> WeeklySummary {
+        let directory = dataDirectory
+        return await Task.detached(priority: .utility) {
+            WeeklySummary.make(events: HabitStore.allEvents(in: directory), interval: interval)
+        }.value
+    }
+
+    private static let weeklySentKey = "RamCleanWeeklySummarySentAt"
+    private var sendingWeekly = false
+
+    /// On Monday morning, sends a summary of last week (skipped when nothing happened).
+    private func checkWeeklySummary(now: Date) {
+        guard prefs.weeklySummaryEnabled, !sendingWeekly else { return }
+        let defaults = UserDefaults.standard
+        // The first check only starts the clock, so installing or updating doesn't send one right away.
+        guard let lastSent = defaults.object(forKey: Self.weeklySentKey) as? Date else {
+            defaults.set(now, forKey: Self.weeklySentKey)
+            return
+        }
+        guard WeeklySummary.notificationDue(now: now, lastSent: lastSent) else { return }
+        sendingWeekly = true
+        Task {
+            let summary = await weeklySummary(WeeklySummary.week(before: now))
+            sendingWeekly = false
+            defaults.set(now, forKey: Self.weeklySentKey)
+            if !summary.isEmpty { notifier.weekly(summary.notificationText) }
+        }
     }
 
     func resetModel() {

@@ -37,6 +37,8 @@ public struct HabitStats: Equatable, Sendable {
 
 public enum HabitEventKind: String, Codable, Sendable {
     case activated, launched, terminated, suggested, quitBySuggestion, kept, alwaysKept, forceQuit, regretRelaunch, stayedClosed, neverQuit, restarted, diskWarning, movedToTrash, movedOffMac, cleanedUp, thresholdAlert
+    /// You reset what RamClean learned about the app: its earlier answers no longer count.
+    case forgotten
 }
 
 public struct HabitEvent: Codable, Equatable, Sendable, Identifiable {
@@ -46,6 +48,13 @@ public struct HabitEvent: Codable, Equatable, Sendable, Identifiable {
     public var key: String
     public var name: String
     public var detail: String?
+    /// Memory an app was using when you quit it, or disk space a cleanup freed. Nil in events
+    /// logged before this was kept.
+    public var bytes: UInt64?
+
+    public init(date: Date, kind: HabitEventKind, key: String, name: String, detail: String? = nil, bytes: UInt64? = nil) {
+        self.date = date; self.kind = kind; self.key = key; self.name = name; self.detail = detail; self.bytes = bytes
+    }
 }
 
 /// The habit log. `habits.json` holds per-app daily usage; `events.jsonl` is an
@@ -114,7 +123,7 @@ public final class HabitStore {
         log(.launched, key: key, name: name, at: now)
     }
 
-    public func recordDecision(_ kind: HabitEventKind, key: String, name: String, detail: String? = nil, at now: Date) {
+    public func recordDecision(_ kind: HabitEventKind, key: String, name: String, detail: String? = nil, bytes: UInt64? = nil, at now: Date) {
         touch(key, name, now)
         var answers = habits[key]!.answers ?? []
         switch kind {
@@ -131,11 +140,22 @@ public final class HabitStore {
         default: break
         }
         habits[key]!.answers = Array(answers.suffix(Self.keepAnswers))
-        log(kind, key: key, name: name, detail: detail, at: now)
+        log(kind, key: key, name: name, detail: detail, bytes: bytes, at: now)
     }
 
-    public func log(_ kind: HabitEventKind, key: String, name: String, detail: String? = nil, at now: Date) {
-        let event = HabitEvent(date: now, kind: kind, key: key, name: name, detail: detail)
+    /// Forgets your answers about one app, so it is judged afresh and relearned from new ones.
+    /// Its usage history stays: that's what the app is doing, not what you told RamClean.
+    public func forget(key: String, name: String, at now: Date) {
+        if var h = habits[key] {
+            h.answers = []; h.timesKept = 0; h.timesQuitBySuggestion = 0; h.regrets = 0
+            habits[key] = h
+            dirty = true
+        }
+        log(.forgotten, key: key, name: habits[key]?.name ?? name, detail: "Learned answers cleared", at: now)
+    }
+
+    public func log(_ kind: HabitEventKind, key: String, name: String, detail: String? = nil, bytes: UInt64? = nil, at now: Date) {
+        let event = HabitEvent(date: now, kind: kind, key: key, name: name, detail: detail, bytes: bytes)
         recentEvents.append(event)
         if recentEvents.count > Self.maxRecent { recentEvents.removeFirst(recentEvents.count - Self.maxRecent) }
         if var line = try? Self.encoder.encode(event) {
@@ -205,6 +225,13 @@ public final class HabitStore {
             try? Data(lines.joined(separator: [0x0A]) + [0x0A]).write(to: eventsURL, options: .atomic)
         }
         recentEvents = lines.suffix(Self.maxRecent).compactMap { try? Self.decoder.decode(HabitEvent.self, from: Data($0)) }
+    }
+
+    /// Every event still in events.jsonl, oldest first: more than `recentEvents` keeps, for
+    /// summaries that look back a week or more. Reads the file, so call off the main thread.
+    public static func allEvents(in directory: URL) -> [HabitEvent] {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent("events.jsonl")) else { return [] }
+        return data.split(separator: 0x0A).compactMap { try? decoder.decode(HabitEvent.self, from: Data($0)) }
     }
 
     public static let encoder: JSONEncoder = { let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; return e }()

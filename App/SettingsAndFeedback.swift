@@ -41,6 +41,7 @@ private struct GeneralSettings: View {
                 Text(loginError).font(.caption).foregroundStyle(.red)
             }
             Toggle("Send notifications suggesting apps to quit", isOn: $model.prefs.notificationsEnabled)
+            Toggle("Send a summary of last week on Monday mornings", isOn: $model.prefs.weeklySummaryEnabled)
             Button("Send a test notification") { model.notifier.sendTest() }
             Picker("Check every", selection: $model.prefs.checkInterval) {
                 ForEach([5.0, 10, 15, 30, 60, 120], id: \.self) { Text("\(Int($0)) seconds").tag($0) }

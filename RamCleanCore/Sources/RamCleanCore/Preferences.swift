@@ -5,6 +5,8 @@ public struct Preferences: Codable, Equatable, Sendable {
     /// Seconds between checks.
     public var checkInterval: Double = 15
     public var notificationsEnabled = true
+    /// A summary of last week on Monday morning.
+    public var weeklySummaryEnabled = true
     /// Only suggest quitting when memory used is at least this percent (or pressure is elevated).
     public var memoryTriggerPercent: Double = 80
     /// Ignore apps smaller than this.
@@ -66,6 +68,7 @@ public struct Preferences: Codable, Equatable, Sendable {
         func v<T: Decodable>(_ k: CodingKeys, _ cur: T) -> T { (try? c.decodeIfPresent(T.self, forKey: k)).flatMap { $0 } ?? cur }
         checkInterval = v(.checkInterval, checkInterval)
         notificationsEnabled = v(.notificationsEnabled, notificationsEnabled)
+        weeklySummaryEnabled = v(.weeklySummaryEnabled, weeklySummaryEnabled)
         memoryTriggerPercent = v(.memoryTriggerPercent, memoryTriggerPercent)
         minAppMemoryMB = v(.minAppMemoryMB, minAppMemoryMB)
         deadweightThreshold = v(.deadweightThreshold, deadweightThreshold)

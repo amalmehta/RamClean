@@ -112,6 +112,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         send(id: "quit-done-\(key)", title: "Quit \(name)", body: body, category: Self.quitDoneCategory, key: key, art: .quitDone)
     }
 
+    static let weeklyKey = "weekly"
+
+    /// Monday morning's summary of last week. Tapping it opens This Week.
+    func weekly(_ text: (title: String, body: String)) {
+        send(id: Self.weeklyKey, title: text.title, body: text.body, category: Self.infoCategory, key: Self.weeklyKey, art: .quitDone)
+    }
+
     func withdraw(_ ids: [String]) {
         let center = UNUserNotificationCenter.current()
         center.removeDeliveredNotifications(withIdentifiers: ids)

@@ -15,6 +15,7 @@ RamClean/
 │   ├── AppModel.swift            Runs the checks, habit tracking, quitting, answers, retraining; Format helpers
 │   ├── Notifier.swift            Notifications with Quit / Keep / Always keep / Force Quit buttons
 │   ├── MainView.swift            Sidebar window, Overview page, app rows, stable row order
+│   ├── ThisWeekView.swift        This Week: memory and disk freed, answers, what the model learned, per-app reset
 │   ├── HabitsAndModelViews.swift Habits table, Activity Log, Model page
 │   ├── MenuBarView.swift         Menu bar popover
 │   ├── SettingsAndFeedback.swift Settings tabs (General, Thresholds, Protection, Data, Licence) and the Feedback sheet
@@ -44,6 +45,7 @@ RamClean/
 │   │   ├── KillLedger.swift      Follows apps RamClean quit for 30 minutes to learn whether you wanted them back
 │   │   ├── Forecast.swift        Disk-full forecast and apps whose memory has swollen
 │   │   ├── Alerts.swift          Threshold alerts (memory, CPU, disk) and the recommendations they carry
+│   │   ├── WeeklySummary.swift   A week of the habit log added up, and when the Monday summary is due
 │   │   └── Licensing/
 │   │       ├── ProductConfig.swift   Price, trial, grace, checkout, appcast, store IDs: the one place to change them
 │   │       ├── Licensing.swift       Trial clock, licence record, the state shown in the UI
@@ -52,6 +54,7 @@ RamClean/
 │   └── Tests/RamCleanCoreTests/
 │       ├── RamCleanCoreTests.swift
 │       ├── LicensingTests.swift  Licensing against a fake HTTP client
+│       ├── WeeklySummaryTests.swift This Week's sums against Fixtures/week-events.jsonl
 │       ├── SampleBenchmark.swift Opt-in timing of a live check (RAMCLEAN_BENCH=1)
 │       └── ScanBenchmark.swift   Opt-in timing of a real disk scan (RAMCLEAN_BENCH=1)
 ├── site/                         The product website (static HTML, light and dark, phone-friendly)

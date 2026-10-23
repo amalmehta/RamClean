@@ -2,11 +2,12 @@ import RamCleanCore
 import SwiftUI
 
 enum SidebarItem: String, CaseIterable, Identifiable {
-    case overview = "Overview", habits = "Habits", activity = "Activity Log", model = "Model"
+    case overview = "Overview", thisWeek = "This Week", habits = "Habits", activity = "Activity Log", model = "Model"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .overview: return "gauge.with.dots.needle.50percent"
+        case .thisWeek: return "calendar"
         case .habits: return "chart.bar.xaxis"
         case .activity: return "list.bullet.rectangle"
         case .model: return "brain"
@@ -43,6 +44,7 @@ struct MainView: View {
             Group {
                 switch section {
                 case .overview: OverviewView()
+                case .thisWeek: ThisWeekView()
                 case .habits: HabitsView()
                 case .activity: ActivityView()
                 case .model: ModelView()
@@ -60,7 +62,7 @@ struct MainView: View {
             }
         }
         .background {
-            // ⌘1–⌘4 switch sections, like the sidebar.
+            // ⌘1–⌘5 switch sections, like the sidebar.
             ForEach(Array(SidebarItem.allCases.enumerated()), id: \.element) { i, item in
                 Button(item.rawValue) { section = item }
                     .keyboardShortcut(KeyEquivalent(Character(String(i + 1))))
@@ -70,6 +72,12 @@ struct MainView: View {
         .sheet(isPresented: $showFeedback) { FeedbackView() }
         // "Show recommendations" on an alert lands on the Overview with that bar's list open.
         .onChange(of: model.requestedPanel) { _, p in if p != nil { section = .overview } }
+        // The Monday summary notification lands on This Week.
+        .onChange(of: model.requestedSection, initial: true) { _, s in
+            guard let s else { return }
+            section = s
+            model.requestedSection = nil
+        }
     }
 }
 

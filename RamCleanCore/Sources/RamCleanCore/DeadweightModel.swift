@@ -151,6 +151,18 @@ public final class DeadweightModel {
         return true
     }
 
+    /// Drops every answer about one app, so the next training relearns it from scratch.
+    /// Returns how many were dropped.
+    @discardableResult
+    public func forget(key: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        let before = examples.count
+        examples.removeAll { $0.features.bundleID == key }
+        let dropped = before - examples.count
+        if dropped > 0 { persist(); refreshCounts() }
+        return dropped
+    }
+
     public func reset() {
         lock.lock(); defer { lock.unlock() }
         examples = []; model = nil; probabilityOutput = nil; knownIDs = []

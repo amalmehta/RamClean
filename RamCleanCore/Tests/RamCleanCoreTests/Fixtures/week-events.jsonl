@@ -1,0 +1,43 @@
+{"id":"00000000-0000-0000-0000-000000000001","date":"2026-10-05T08:58:00Z","kind":"launched","key":"com.tinyspeck.slackmacgap","name":"Slack"}
+{"id":"00000000-0000-0000-0000-000000000002","date":"2026-10-06T10:00:00Z","kind":"kept","key":"com.tinyspeck.slackmacgap","name":"Slack","detail":"from notification"}
+{"id":"00000000-0000-0000-0000-000000000003","date":"2026-10-07T10:00:00Z","kind":"kept","key":"com.tinyspeck.slackmacgap","name":"Slack","detail":"from window"}
+{"id":"00000000-0000-0000-0000-000000000004","date":"2026-10-07T12:00:00Z","kind":"quitBySuggestion","key":"com.spotify.client","name":"Spotify","detail":"from notification","bytes":943718400}
+{"id":"00000000-0000-0000-0000-000000000005","date":"2026-10-07T12:31:00Z","kind":"stayedClosed","key":"com.spotify.client","name":"Spotify"}
+{"id":"00000000-0000-0000-0000-000000000006","date":"2026-10-08T10:00:00Z","kind":"kept","key":"com.tinyspeck.slackmacgap","name":"Slack","detail":"from notification"}
+{"id":"00000000-0000-0000-0000-000000000007","date":"2026-10-09T12:00:00Z","kind":"quitBySuggestion","key":"com.spotify.client","name":"Spotify","detail":"from notification","bytes":943718400}
+{"id":"00000000-0000-0000-0000-000000000008","date":"2026-10-10T16:00:00Z","kind":"quitBySuggestion","key":"com.figma.Desktop","name":"Figma","detail":"from menu bar","bytes":734003200}
+{"id":"00000000-0000-0000-0000-000000000009","date":"2026-10-11T18:00:00Z","kind":"movedToTrash","key":"disk","name":"Old Xcode archives","detail":"5 GB \u00b7 ~/Library/Developer/Xcode/Archives","bytes":5368709120}
+{"id":"00000000-0000-0000-0000-00000000000A","date":"2026-10-12T00:00:00Z","kind":"launched","key":"com.spotify.client","name":"Spotify"}
+{"id":"00000000-0000-0000-0000-00000000000B","date":"2026-10-12T09:30:00Z","kind":"suggested","key":"com.spotify.client","name":"Spotify","detail":"score 82%, 1 GB"}
+{"id":"00000000-0000-0000-0000-00000000000C","date":"2026-10-12T09:31:00Z","kind":"quitBySuggestion","key":"com.spotify.client","name":"Spotify","detail":"from notification","bytes":1073741824}
+{"id":"00000000-0000-0000-0000-00000000000D","date":"2026-10-12T09:31:02Z","kind":"terminated","key":"com.spotify.client","name":"Spotify"}
+{"id":"00000000-0000-0000-0000-00000000000E","date":"2026-10-12T10:01:00Z","kind":"stayedClosed","key":"com.spotify.client","name":"Spotify"}
+{"id":"00000000-0000-0000-0000-00000000000F","date":"2026-10-12T11:00:00Z","kind":"quitBySuggestion","key":"com.tinyspeck.slackmacgap","name":"Slack","detail":"from notification","bytes":2147483648}
+{"id":"00000000-0000-0000-0000-000000000010","date":"2026-10-12T11:10:00Z","kind":"regretRelaunch","key":"com.tinyspeck.slackmacgap","name":"Slack","detail":"Reopened 10 min after RamClean quit it"}
+{"id":"00000000-0000-0000-0000-000000000011","date":"2026-10-12T11:10:00Z","kind":"launched","key":"com.tinyspeck.slackmacgap","name":"Slack"}
+{"id":"00000000-0000-0000-0000-000000000012","date":"2026-10-13T09:00:00Z","kind":"activated","key":"com.figma.Desktop","name":"Figma"}
+{"id":"00000000-0000-0000-0000-000000000013","date":"2026-10-13T10:00:00Z","kind":"kept","key":"com.figma.Desktop","name":"Figma","detail":"from notification"}
+{"id":"00000000-0000-0000-0000-000000000014","date":"2026-10-13T14:00:00Z","kind":"quitBySuggestion","key":"com.tinyspeck.slackmacgap","name":"Slack","detail":"from notification","bytes":1073741824}
+{"id":"00000000-0000-0000-0000-000000000015","date":"2026-10-13T14:30:00Z","kind":"stayedClosed","key":"com.tinyspeck.slackmacgap","name":"Slack"}
+{"id":"00000000-0000-0000-0000-000000000016","date":"2026-10-13T16:00:00Z","kind":"movedToTrash","key":"disk","name":"Chrome cache","detail":"3 GB \u00b7 ~/Library/Caches/Google","bytes":3221225472}
+{"id":"00000000-0000-0000-0000-000000000017","date":"2026-10-14T10:00:00Z","kind":"kept","key":"com.figma.Desktop","name":"Figma","detail":"from window"}
+{"id":"00000000-0000-0000-0000-000000000018","date":"2026-10-14T11:00:00Z","kind":"alwaysKept","key":"com.apple.dt.Xcode","name":"Xcode","detail":"from notification"}
+{"id":"00000000-0000-0000-0000-000000000019","date":"2026-10-14T15:00:00Z","kind":"quitBySuggestion","key":"com.tinyspeck.slackmacgap","name":"Slack","detail":"from window","bytes":1073741824}
+{"id":"00000000-0000-0000-0000-00000000001A","date":"2026-10-14T15:30:00Z","kind":"stayedClosed","key":"com.tinyspeck.slackmacgap","name":"Slack"}
+{"id":"00000000-0000-0000-0000-00000000001B","date":"2026-10-15T10:00:00Z","kind":"quitBySuggestion","key":"us.zoom.xos","name":"zoom.us","detail":"from notification","bytes":838860800}
+{"id":"00000000-0000-0000-0000-00000000001C","date":"2026-10-15T10:30:00Z","kind":"neverQuit","key":"us.zoom.xos","name":"zoom.us","detail":"Still open 30 min after RamClean asked it to quit"}
+{"id":"00000000-0000-0000-0000-00000000001D","date":"2026-10-15T12:00:00Z","kind":"quitBySuggestion","key":"com.tinyspeck.slackmacgap","name":"Slack","detail":"from notification","bytes":1073741824}
+{"id":"00000000-0000-0000-0000-00000000001E","date":"2026-10-15T12:30:00Z","kind":"stayedClosed","key":"com.tinyspeck.slackmacgap","name":"Slack"}
+{"id":"00000000-0000-0000-0000-00000000001F","date":"2026-10-15T17:00:00Z","kind":"cleanedUp","key":"disk","name":"Homebrew downloads","detail":"1 GB \u00b7 brew cleanup","bytes":1073741824}
+{"id":"00000000-0000-0000-0000-000000000020","date":"2026-10-16T09:00:00Z","kind":"quitBySuggestion","key":"com.tinyspeck.slackmacgap","name":"Slack","detail":"from quit all","bytes":1073741824}
+{"id":"00000000-0000-0000-0000-000000000021","date":"2026-10-16T09:00:01Z","kind":"quitBySuggestion","key":"notion.id","name":"Notion","detail":"from quit all","bytes":536870912}
+{"id":"00000000-0000-0000-0000-000000000022","date":"2026-10-16T09:30:00Z","kind":"stayedClosed","key":"com.tinyspeck.slackmacgap","name":"Slack"}
+{"id":"00000000-0000-0000-0000-000000000023","date":"2026-10-16T09:30:01Z","kind":"stayedClosed","key":"notion.id","name":"Notion"}
+{"id":"00000000-0000-0000-0000-000000000024","date":"2026-10-16T13:00:00Z","kind":"movedToTrash","key":"disk","name":"Old installer","detail":"420 MB \u00b7 ~/Downloads/Installer.dmg"}
+{"id":"00000000-0000-0000-0000-000000000025","date":"2026-10-17T10:00:00Z","kind":"forgotten","key":"notion.id","name":"Notion","detail":"Learned answers cleared"}
+{"id":"00000000-0000-0000-0000-000000000026","date":"2026-10-17T11:00:00Z","kind":"kept","key":"com.google.Chrome","name":"Google Chrome","detail":"from notification"}
+{"id":"00000000-0000-0000-0000-000000000027","date":"2026-10-17T15:00:00Z","kind":"movedOffMac","key":"disk","name":"Raw footage","detail":"10 GB \u2192 /Volumes/Backup","bytes":10737418240}
+{"id":"00000000-0000-0000-0000-000000000028","date":"2026-10-18T11:00:00Z","kind":"kept","key":"com.google.Chrome","name":"Google Chrome","detail":"from notification"}
+{"id":"00000000-0000-0000-0000-000000000029","date":"2026-10-18T23:59:59Z","kind":"kept","key":"com.spotify.client","name":"Spotify","detail":"from menu bar"}
+{"id":"00000000-0000-0000-0000-00000000002A","date":"2026-10-19T00:00:00Z","kind":"quitBySuggestion","key":"com.spotify.client","name":"Spotify","detail":"from notification","bytes":1073741824}
+{"id":"00000000-0000-0000-0000-00000000002B","date":"2026-10-19T00:00:30Z","kind":"movedToTrash","key":"disk","name":"npm cache","detail":"2 GB \u00b7 ~/.npm","bytes":2147483648}

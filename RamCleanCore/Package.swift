@@ -7,7 +7,8 @@ let package = Package(
     products: [.library(name: "RamCleanCore", targets: ["RamCleanCore"])],
     targets: [
         .target(name: "RamCleanCore", path: "Sources/RamCleanCore"),
-        .testTarget(name: "RamCleanCoreTests", dependencies: ["RamCleanCore"], path: "Tests/RamCleanCoreTests"),
+        .testTarget(name: "RamCleanCoreTests", dependencies: ["RamCleanCore"], path: "Tests/RamCleanCoreTests",
+                    resources: [.copy("Fixtures")]),
     ],
     swiftLanguageVersions: [.v5]
 )

@@ -21,6 +21,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var grown: [String: MemoryGrowth.Growth] = [:]
     /// Days until the disk reaches its alert line at the current rate, when it's shrinking.
     @Published private(set) var diskFullInDays: Double?
+    /// Suggestions and alerts are held until then (from the menu bar: a call, a presentation).
+    @Published private(set) var pausedUntil: Date? = UserDefaults.standard.object(forKey: AppModel.pausedKey) as? Date
+    var notificationsPaused: Bool { pausedUntil.map { $0 > Date() } ?? false }
+    private static let pausedKey = "RamCleanNotificationsPausedUntil"
     @Published private(set) var isTraining = false
     @Published private(set) var diskReport: DiskReport?
     @Published private(set) var diskScanStep: String?
@@ -99,14 +103,21 @@ final class AppModel: ObservableObject {
         notifier.setUp()
         observeWorkspace()
         if let app = NSWorkspace.shared.frontmostApplication { frontmost = (Self.key(app), Self.name(app)) }
-        retrain()
+        // The model trained last time is reused when there are no new answers since.
+        if model.restoredFromDisk { modelStatus = model.status } else { retrain() }
         tick()
         scheduleTimer()
+        observers.append(NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.scheduleTimer() }
+        })
     }
 
+    /// In Low Power Mode, checks at most once a minute to save battery.
     private func scheduleTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: max(5, prefs.checkInterval), repeats: true) { [weak self] _ in
+        var interval = max(5, prefs.checkInterval)
+        if ProcessInfo.processInfo.isLowPowerModeEnabled { interval = max(60, interval) }
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
     }
@@ -149,19 +160,31 @@ final class AppModel: ObservableObject {
         if diskHistory.record(free: snapshot.diskFree, at: now) { diskHistory.save(to: diskHistoryURL) }
         let floor = Int64(Double(snapshot.diskTotal) * (1 - prefs.diskAlertUsedPercent / 100))
         diskFullInDays = diskHistory.daysUntil(free: floor, now: now)
-        checkDiskForecast(snapshot, now: now)
+        if !notificationsPaused { checkDiskForecast(snapshot, now: now) }
         habits = habitStore.habits.values.sorted { lhs, rhs in
             (habitStore.stats(for: lhs.key, now: now).avgDailyMinutes14d) > (habitStore.stats(for: rhs.key, now: now).avgDailyMinutes14d)
         }
         for (r, outcome) in kills.expire(now: now) { resolve(r, outcome, at: now) }
         habitStore.save(now: now)
 
+        if pausedUntil.map({ $0 <= now }) ?? false { resumeNotifications() }
+        guard !notificationsPaused else { return }
         let policy = SuggestionPolicy(prefs: prefs)
         if let pick = policy.pick(from: result, system: snapshot, lastNotified: lastNotified,
                                   lastAnyNotification: lastAnyNotification, now: now) {
             suggest(pick, system: snapshot, now: now)
         }
         checkThresholds(snapshot, result, now: now)
+    }
+
+    func pauseNotifications(for seconds: TimeInterval) {
+        pausedUntil = Date().addingTimeInterval(seconds)
+        UserDefaults.standard.set(pausedUntil, forKey: Self.pausedKey)
+    }
+
+    func resumeNotifications() {
+        pausedUntil = nil
+        UserDefaults.standard.removeObject(forKey: Self.pausedKey)
     }
 
     /// Credits the frontmost app with the time since the last tick — but only while
@@ -378,6 +401,21 @@ final class AppModel: ObservableObject {
             refreshEvents()
             watchQuit(key: key, name: name, pids: pids)
         }
+    }
+
+    /// Quits several apps after one confirmation that names them and what they'd free.
+    func quitAll(_ apps: [Assessment]) {
+        guard !apps.isEmpty else { return }
+        let total = apps.reduce(UInt64(0)) { $0 + $1.group.memoryBytes }
+        let alert = NSAlert()
+        alert.messageText = "Quit \(apps.count) apps?"
+        alert.informativeText = apps.map(\.group.name).joined(separator: ", ")
+            + ".\n\nThat frees about \(Format.bytes(total)). Each is asked to quit normally, so it can offer to save first."
+        alert.addButton(withTitle: "Quit \(apps.count) Apps")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        for a in apps { quit(key: a.group.habitKey, source: "quit all") }
     }
 
     /// Quits the app and opens it again once it has exited, to free the memory it has built

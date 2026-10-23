@@ -175,6 +175,12 @@ final class HabitAndScoreTests: XCTestCase {
         XCTAssertTrue(unseen.usedModel)
         XCTAssertGreaterThan(unseen.value, 0.5)
 
+        // The trained model is saved, so a launch with the same answers needn't retrain...
+        let relaunched = DeadweightModel(directory: dir)
+        XCTAssertTrue(relaunched.restoredFromDisk)
+        XCTAssertTrue(relaunched.status.isTrained)
+        XCTAssertEqual(relaunched.probability(f(idle: 500, avg: 1, days: 1, id: "dead1"))!, pDead, accuracy: 1e-9)
+
         // Persisted, and a regret flips the latest answer.
         let reopened = DeadweightModel(directory: dir)
         XCTAssertEqual(reopened.examples.count, 30)
@@ -185,6 +191,8 @@ final class HabitAndScoreTests: XCTestCase {
         XCTAssertTrue(reopened.removeLatest(key: "dead2", since: .distantPast, label: .deadweight))
         XCTAssertFalse(reopened.removeLatest(key: "dead2", since: Date().addingTimeInterval(60), label: .deadweight), "nothing that recent")
         XCTAssertEqual(DeadweightModel(directory: dir).examples.count, 29)
+        // ...but once the answers change, the saved model no longer matches and isn't used.
+        XCTAssertFalse(DeadweightModel(directory: dir).restoredFromDisk)
     }
 
     func testOnlyAppsThatCouldBeSuggestedAskTheModel() {

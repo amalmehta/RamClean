@@ -41,6 +41,7 @@ private struct GeneralSettings: View {
             Picker("Check every", selection: $model.prefs.checkInterval) {
                 ForEach([5.0, 10, 15, 30, 60, 120], id: \.self) { Text("\(Int($0)) seconds").tag($0) }
             }
+            Text("In Low Power Mode, RamClean checks at most once a minute.").font(.caption).foregroundStyle(.secondary)
             Picker("Offer Force Quit after", selection: $model.prefs.forceQuitAfterSeconds) {
                 ForEach([5.0, 8, 10, 15, 30], id: \.self) { Text("\(Int($0)) seconds").tag($0) }
             }

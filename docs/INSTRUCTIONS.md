@@ -18,6 +18,15 @@ open build/RamClean.app
 
 The script generates `RamClean.xcodeproj` from `project.yml`, builds a Release copy and puts it at `build/RamClean.app`. Drag it into `/Applications` if you want to keep it there.
 
+### Keep Accessibility access across rebuilds
+
+By default each build is signed ad hoc, which gives it a new identity, so macOS forgets that you allowed RamClean Accessibility access and the Settings row goes back to "Allow Accessibility…". To stop that, make a signing certificate once. The build script uses it automatically when it's there.
+
+1. Open Keychain Access and choose **Keychain Access › Certificate Assistant › Create a Certificate…**.
+2. Name it exactly `RamClean Development`, set **Identity Type** to **Self Signed Root** and **Certificate Type** to **Code Signing**, then click **Create**.
+3. Rebuild with `./scripts/build.sh`. It prints "Signing with RamClean Development".
+4. Allow Accessibility for RamClean once more. From then on it stays allowed after rebuilds.
+
 To rebuild and swap in the new copy in one step, use `./scripts/build.sh --run`. It quits any RamClean that's running (including an older copy opened at login) and opens the new build. If the build fails, the script stops and leaves `build/RamClean.app` as it was.
 
 To work on it in Xcode instead, run `xcodegen generate` and open `RamClean.xcodeproj`.

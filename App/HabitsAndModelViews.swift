@@ -42,9 +42,12 @@ struct HabitsView: View {
 
 struct ActivityView: View {
     @EnvironmentObject var model: AppModel
+    /// Opening, closing and switching apps are most of the log; RamClean's own actions are what you come here for.
+    @AppStorage("showRoutineActivity") private var showRoutine = false
+    private static let routine: Set<HabitEventKind> = [.activated, .launched, .terminated]
 
     var body: some View {
-        List(model.events.reversed()) { e in
+        List(model.events.reversed().filter { showRoutine || !Self.routine.contains($0.kind) }) { e in
             HStack(spacing: 10) {
                 Image(systemName: symbol(e.kind)).foregroundStyle(color(e.kind)).frame(width: 20)
                 VStack(alignment: .leading, spacing: 1) {
@@ -57,6 +60,15 @@ struct ActivityView: View {
         }
         .overlay {
             if model.events.isEmpty { ContentUnavailableView("No activity yet", systemImage: "list.bullet.rectangle", description: Text("Launches, quits, suggestions and your answers appear here.")) }
+        }
+        .safeAreaInset(edge: .top) {
+            HStack {
+                Toggle("Show apps opening, closing and switching", isOn: $showRoutine).toggleStyle(.checkbox)
+                Spacer()
+            }
+            .font(.callout)
+            .padding(.horizontal, 16).padding(.vertical, 8)
+            .background(.bar)
         }
     }
 

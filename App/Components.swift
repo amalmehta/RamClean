@@ -38,11 +38,20 @@ struct UsageBar: View {
 struct AppIcon: View {
     var path: String?
     var size: CGFloat = 22
+    /// Rows redraw on every check, so each app's icon is read from disk once, not each time.
+    private static let cache = NSCache<NSString, NSImage>()
+
+    static func icon(_ path: String) -> NSImage {
+        if let cached = cache.object(forKey: path as NSString) { return cached }
+        let image = NSWorkspace.shared.icon(forFile: path)
+        cache.setObject(image, forKey: path as NSString)
+        return image
+    }
 
     var body: some View {
         Group {
             if let path {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+                Image(nsImage: Self.icon(path))
                     .resizable()
             } else {
                 Image(systemName: "terminal").resizable().scaledToFit().padding(3).foregroundStyle(.secondary)

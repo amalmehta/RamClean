@@ -6,8 +6,16 @@ cd "$(dirname "$0")/.."
 mkdir -p build
 xcodegen generate --quiet
 log=build/xcodebuild.log
+# Ad-hoc signing gives each build a new identity, so macOS forgets RamClean's Accessibility
+# access every rebuild. A "RamClean Development" certificate in your keychain keeps it stable
+# (docs/INSTRUCTIONS.md says how to make one).
+sign=()
+if security find-identity -v -p codesigning 2>/dev/null | grep -q '"RamClean Development"'; then
+  sign=(CODE_SIGN_IDENTITY="RamClean Development")
+  echo "Signing with RamClean Development"
+fi
 if ! xcodebuild -project RamClean.xcodeproj -scheme RamClean -configuration Release \
-  -destination 'platform=macOS' -derivedDataPath build/DerivedData build > "$log" 2>&1; then
+  -destination 'platform=macOS' -derivedDataPath build/DerivedData "${sign[@]}" build > "$log" 2>&1; then
   grep -E "error:" "$log" || tail -20 "$log"
   echo "Build failed; build/RamClean.app is unchanged. Full log: $log" >&2
   exit 1

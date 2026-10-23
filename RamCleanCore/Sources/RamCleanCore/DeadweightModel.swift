@@ -19,7 +19,7 @@ public struct TrainingExample: Codable, Equatable, Sendable {
     }
 }
 
-public struct ModelStatus: Equatable, Sendable {
+public struct ModelStatus: Codable, Equatable, Sendable {
     public var isTrained = false
     public var examples = 0
     public var deadweightExamples = 0
@@ -50,15 +50,66 @@ public final class DeadweightModel {
     /// Stand-in for apps the model has never seen an answer about.
     static let otherApp = "_other"
     private let fileURL: URL
+    /// The last trained model, compiled, and what it was trained on, so a launch with no new
+    /// answers loads it instead of spending a second or more retraining.
+    private let compiledURL: URL
+    private let savedInfoURL: URL
     private let lock = NSLock()
+    /// True when the model came from disk at launch, so there's nothing to retrain yet.
+    public private(set) var restoredFromDisk = false
+
+    private struct SavedModel: Codable {
+        var digest: UInt64
+        var status: ModelStatus
+        var output: String
+        var known: [String]
+    }
 
     public init(directory: URL) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         fileURL = directory.appendingPathComponent("training.jsonl")
+        compiledURL = directory.appendingPathComponent("model.mlmodelc", isDirectory: true)
+        savedInfoURL = directory.appendingPathComponent("model.json")
         if let data = try? Data(contentsOf: fileURL) {
             examples = data.split(separator: 0x0A).compactMap { try? HabitStore.decoder.decode(TrainingExample.self, from: Data($0)) }
         }
         refreshCounts()
+        restoreSaved()
+    }
+
+    private func restoreSaved() {
+        guard let data = try? Data(contentsOf: savedInfoURL),
+              let saved = try? HabitStore.decoder.decode(SavedModel.self, from: data),
+              saved.digest == Self.digest(examples),
+              let m = try? MLModel(contentsOf: compiledURL) else { return }
+        setStatus(saved.status, model: m, output: saved.output, known: Set(saved.known))
+        restoredFromDisk = true
+    }
+
+    /// A fingerprint of the answers (FNV-1a over their sorted-key JSON), stable across launches.
+    static func digest(_ rows: [TrainingExample]) -> UInt64 {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = .sortedKeys
+        var h: UInt64 = 0xcbf2_9ce4_8422_2325
+        for row in rows {
+            for byte in (try? encoder.encode(row)) ?? Data() { h = (h ^ UInt64(byte)) &* 0x0000_0100_0000_01B3 }
+            h = (h ^ 0x0A) &* 0x0000_0100_0000_01B3
+        }
+        return h
+    }
+
+    /// Writes the model compiled, with what it was trained on. Failing to save only means the
+    /// next launch retrains.
+    private func save(_ classifier: MLBoostedTreeClassifier, rows: [TrainingExample], status: ModelStatus, output: String) {
+        let fm = FileManager.default
+        let source = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mlmodel")
+        defer { try? fm.removeItem(at: source) }
+        guard (try? classifier.write(to: source)) != nil, let compiled = try? MLModel.compileModel(at: source) else { return }
+        try? fm.removeItem(at: compiledURL)
+        guard (try? fm.moveItem(at: compiled, to: compiledURL)) != nil else { return }
+        let info = SavedModel(digest: Self.digest(rows), status: status, output: output, known: Array(Set(rows.map(\.features.bundleID))))
+        if let data = try? HabitStore.encoder.encode(info) { try? data.write(to: savedInfoURL, options: .atomic) }
     }
 
     /// Appends one line to training.jsonl rather than rewriting the whole file.
@@ -104,6 +155,8 @@ public final class DeadweightModel {
         lock.lock(); defer { lock.unlock() }
         examples = []; model = nil; probabilityOutput = nil; knownIDs = []
         try? FileManager.default.removeItem(at: fileURL)
+        try? FileManager.default.removeItem(at: compiledURL)
+        try? FileManager.default.removeItem(at: savedInfoURL)
         status = ModelStatus()
     }
 
@@ -143,6 +196,7 @@ public final class DeadweightModel {
             s.modelWeight = min(0.85, Double(rows.count) / 40)
             s.message = "Trained on \(rows.count) answers"
             setStatus(s, model: mlModel, output: output, known: Set(rows.map(\.features.bundleID)))
+            if let output { save(classifier, rows: rows, status: s, output: output) }
         } catch {
             s.message = "Training failed: \(error.localizedDescription)"
             setStatus(s, model: nil, output: nil)

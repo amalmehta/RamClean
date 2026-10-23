@@ -75,10 +75,12 @@ struct OverviewView: View {
     @State private var showOthers = false
     @State private var order = StableOrder.overview
     @State private var panel: UsagePanel?
+    @State private var filter = ""
 
     var body: some View {
-        let apps = order.arrange(model.assessments.filter { $0.group.kind == .app })
-        let others = model.assessments.filter { $0.group.kind != .app }
+        let match = { (a: Assessment) in filter.isEmpty || a.group.name.localizedCaseInsensitiveContains(filter) }
+        let apps = order.arrange(model.assessments.filter { $0.group.kind == .app }).filter(match)
+        let others = model.assessments.filter { $0.group.kind != .app }.filter(match)
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 gauges
@@ -109,6 +111,9 @@ struct OverviewView: View {
         }
         .onAppear(perform: takeRequestedPanel)
         .onChange(of: model.requestedPanel) { _, _ in takeRequestedPanel() }
+        // ⌘F. A filter also opens the background list, so a helper process can be found by name.
+        .searchable(text: $filter, placement: .toolbar, prompt: "Filter apps")
+        .onChange(of: filter) { _, f in if !f.isEmpty { showOthers = true } }
     }
 
     private func takeRequestedPanel() {

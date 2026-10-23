@@ -26,4 +26,6 @@ flowchart LR
 - [Setup, run and use](docs/INSTRUCTIONS.md)
 - [System design](docs/SYSTEM-DESIGN.md)
 - [What's where](docs/FILE-STRUCTURE.md)
+- [Go-live checklist](docs/GO-LIVE.md): selling it ($5, 14-day trial) with Developer ID, notarization, Lemon Squeezy and Sparkle
+- [Product website](site/index.html)
 - [Project brief](RamClean.md)

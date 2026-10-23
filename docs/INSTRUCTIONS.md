@@ -31,6 +31,10 @@ To rebuild and swap in the new copy in one step, use `./scripts/build.sh --run`.
 
 To work on it in Xcode instead, run `xcodegen generate` and open `RamClean.xcodeproj`.
 
+The first build downloads [Sparkle](https://sparkle-project.org) (auto-updates) through Swift Package Manager, so it needs an internet connection once.
+
+To build the signed, notarized DMG you sell, see `./scripts/release.sh` and [GO-LIVE.md](GO-LIVE.md).
+
 The first time it runs, macOS asks whether RamClean may send notifications. Click **Allow**, or suggestions can only appear in the window and the menu bar. You can change this later in System Settings → Notifications → RamClean.
 
 ## Run the tests
@@ -45,7 +49,7 @@ To time a real disk scan of your home folder, step by step:
 cd RamCleanCore && RAMCLEAN_BENCH=1 swift test --filter ScanBenchmark
 ```
 
-The 25 tests cover process grouping (helpers, and Claude Code inside Terminal), every protection rule, the habit log, the rule-of-thumb score, Create ML training (including apps it has never seen and the "regret" relabel), the notification policy (thresholds and cooldowns), loading preferences, the disk scanner on a fake home folder (including stale projects, unused apps and old downloads, and never active work), threshold alerts (sustain, repeat, recovery, snooze) and their recommendation text, the "why" text for each app, and a live smoke test of the samplers on this Mac.
+The 56 tests (3 opt-in benchmarks are skipped) cover licensing against a fake licence server (trial, activation, offline grace, refunds, deactivation), process grouping (helpers, and Claude Code inside Terminal), every protection rule, the habit log, the rule-of-thumb score, Create ML training (including apps it has never seen and the "regret" relabel), the notification policy (thresholds and cooldowns), loading preferences, the disk scanner on a fake home folder (including stale projects, unused apps and old downloads, and never active work), threshold alerts (sustain, repeat, recovery, snooze) and their recommendation text, the "why" text for each app, and a live smoke test of the samplers on this Mac.
 
 ## Using it
 
@@ -111,12 +115,15 @@ Menu bar apps, command-line tools and background processes are listed in a colla
 - **Thresholds:** when to suggest apps (memory trigger, minimum app size, CPU hog level, deadweight score, cooldowns), threshold alerts (memory, CPU and how long, disk, reminder interval), and what counts as unused (not opened for N days) versus active work (touched within N days).
 - **Protection:** recent-use window, busy work tools and their CPU level, menu bar utilities, always-keep list, and the editable list of work tools (bundle IDs; `com.jetbrains.*` matches a prefix).
 - **Data:** where data lives, Show in Finder, clear habit history, reset preferences.
+- **Licence:** trial days left, licensed, licensed offline, or expired; **Buy**; paste a licence key and **Activate**; **Check Now** and **Deactivate on This Mac…**. General also has **Check for Updates…** and automatic update checks (also in the RamClean menu).
+
+**Trial and licence.** Every feature works for 14 days from the first launch. After that RamClean keeps watching memory, CPU and disk, shows its recommendations and sends alerts, but quitting and restarting apps, moving files to the Trash or off the Mac, and learning from your Keep and Quit answers need a licence ($5, once). Trying one of those shows **Buy** and **Enter Licence Key…**. The sidebar and the menu bar show the trial's days left. A licensed copy checks its key about once a day and keeps working offline for 14 days. Until the store is set up in `ProductConfig.swift` (see [GO-LIVE.md](GO-LIVE.md)), Settings → Licence says "Development copy" and nothing is locked.
 
 **Feedback.** Use the small **Feedback** link at the bottom of the sidebar. Entries are saved to `feedback.jsonl` in the data folder.
 
 ## Where your data lives
 
-Everything stays in `~/Library/Application Support/RamClean/`; nothing is sent anywhere.
+Everything stays in `~/Library/Application Support/RamClean/`. The only things sent anywhere are the licence check (the key and this Mac's name, to Lemon Squeezy) and the update check.
 
 | File | What it holds |
 |---|---|
@@ -128,4 +135,4 @@ Everything stays in `~/Library/Application Support/RamClean/`; nothing is sent a
 | `sizes.json` | Remembered folder sizes, so refreshes (even after a relaunch) only re-measure what changed |
 | `feedback.jsonl` | Feedback you've written |
 
-Preferences live in `UserDefaults` (domain `com.amalmehta.RamClean`).
+Preferences live in `UserDefaults` (domain `com.amalmehta.RamClean`). The trial start and licence are in the Keychain (service `com.amalmehta.RamClean.licence`), with a copy in the same `UserDefaults` domain.

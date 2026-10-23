@@ -73,6 +73,7 @@ struct MenuBarView: View {
                     .buttonStyle(.borderless)
                     .help("Hold suggestions and alerts, say during a call or a presentation")
             }
+            LicenceBadge()
             HStack {
                 Button("Open RamClean") {
                     openWindow(id: "main")

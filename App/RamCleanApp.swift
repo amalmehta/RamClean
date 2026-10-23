@@ -5,6 +5,7 @@ import SwiftUI
 struct RamCleanApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel.shared
+    @StateObject private var updater = Updater.shared
 
     var body: some Scene {
         Window("RamClean", id: "main") {
@@ -20,6 +21,13 @@ struct RamCleanApp: App {
             MenuBarLabel().environmentObject(model)
         }
         .menuBarExtraStyle(.window)
+
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.checkForUpdates() }.disabled(!updater.canCheck)
+                Button("Licence…") { model.showLicenceSettings() }
+            }
+        }
 
         Settings {
             SettingsView().environmentObject(model)
@@ -39,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct MenuBarLabel: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         let used = Int((model.system?.memoryUsedFraction ?? 0) * 100)
@@ -47,6 +56,9 @@ struct MenuBarLabel: View {
             Text("\(used)%").monospacedDigit()
         }
         // The menu bar item is always alive, so it lends the model a way to open the window.
-        .onAppear { model.openMainWindow = { openWindow(id: "main") } }
+        .onAppear {
+            model.openMainWindow = { openWindow(id: "main") }
+            model.openSettings = { openSettings() }
+        }
     }
 }

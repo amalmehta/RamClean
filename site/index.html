@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RamClean – quit the apps you aren't using</title>
+  <meta name="description" content="A Mac menu bar app that spots apps eating memory you aren't using, asks before quitting them, and learns your habits.">
+  <link rel="icon" href="images/icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Price and links also live in RamCleanCore/Sources/RamCleanCore/Licensing/ProductConfig.swift; change both. -->
+  <div class="wrap">
+    <header class="top">
+      <a class="brand" href="index.html"><img src="images/icon.png" alt="">RamClean</a>
+      <nav><a href="#features">Features</a><a href="#price">Price</a><a href="privacy.html">Privacy</a></nav>
+    </header>
+  </div>
+
+  <main>
+    <div class="wrap hero">
+      <img class="icon" src="images/icon.png" alt="RamClean icon">
+      <h1>Your Mac, minus the apps you forgot about.</h1>
+      <p class="lede">RamClean lives in the menu bar, spots apps eating memory you aren't using, asks before quitting them, and learns your habits so it stops asking about the ones you need.</p>
+      <div class="buttons">
+        <a class="button primary" href="https://REPLACE-ME.lemonsqueezy.com/buy/REPLACE-ME">Buy for $5</a>
+        <a class="button" href="download/RamClean.dmg">Download the 14-day free trial</a>
+      </div>
+      <p class="small">One-time purchase. macOS 14 Sonoma or later. Signed and notarized by Apple.</p>
+      <img class="shot" src="images/overview.png" width="960" height="640" alt="RamClean's Overview: memory, CPU and disk bars above a list of apps with how much memory each uses and why it's protected.">
+    </div>
+
+    <section id="features">
+      <div class="wrap">
+        <div class="features">
+          <div class="card"><h3>Asks, never ambushes</h3><p>When memory gets tight, a notification names one idle app and how much it frees. Quit, Keep, or Always keep. Apps are asked to quit politely, so they can save first.</p></div>
+          <div class="card"><h3>Learns what you need</h3><p>Every answer trains a small model on your Mac. Apps you always keep stop coming up; apps you always quit get suggested sooner.</p></div>
+          <div class="card"><h3>Never touches your work</h3><p>The app in front, anything playing audio, terminals running a command, and busy tools like Xcode mid-build are always protected.</p></div>
+          <div class="card"><h3>Alerts with a fix</h3><p>When memory, CPU or disk crosses its line, the alert says what to quit, clear or move, with a one-tap fix that's always recoverable.</p></div>
+          <div class="card"><h3>Finds space you can win</h3><p>Rebuildable caches, build folders in projects you've stopped, apps you haven't opened in months, and big files to move off the Mac. Nothing is deleted permanently.</p></div>
+          <div class="card"><h3>Private by design</h3><p>Your habits, answers and disk scans stay on your Mac. The only network calls are the licence check and update checks. <a href="privacy.html">Details</a></p></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap pair">
+        <div>
+          <h2>Click a bar, see what to do</h2>
+          <p>Memory lists your apps ranked by what they use, with RamClean's call and the reasons: idle three hours, used one day in fourteen, you quit it twice before. Disk shows where the space is and the three biggest wins.</p>
+        </div>
+        <img src="images/memory-recommendations.png" width="1400" height="961" alt="The What to quit list, with each app's memory, verdict, reasons and Quit and Keep buttons." loading="lazy">
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap pair">
+        <img src="images/disk-recommendations.png" width="1400" height="889" alt="The What to clear list, with space you could win per category and the biggest single items." loading="lazy">
+        <div>
+          <h2>Space back, safely</h2>
+          <p>Only rebuildable caches are labelled safe. Everything goes to the Trash, so it can come back, and projects or files you touched in the last 30 days are never suggested.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap pair">
+        <div>
+          <h2>You stay in charge</h2>
+          <p>See how much the model has learned and how accurate it is, and tune every threshold in one Settings window.</p>
+        </div>
+        <img src="images/model.png" width="960" height="640" alt="The Model page, showing training state, accuracy and recent answers." loading="lazy">
+      </div>
+    </section>
+
+    <section id="price" class="price">
+      <div class="wrap narrow">
+        <h2>One price, yours to keep</h2>
+        <div class="amount">$5</div>
+        <p class="small">One-time purchase, plus any sales tax. Free updates for version 1.</p>
+        <ul>
+          <li>Every feature free for 14 days, no account or card needed</li>
+          <li>After the trial, monitoring and alerts keep working; quitting, clearing space and learning need a licence</li>
+          <li>Use your licence on your own Macs (up to the limit in your receipt)</li>
+          <li>30-day refund, no questions asked (<a href="refund.html">policy</a>)</li>
+        </ul>
+        <div class="buttons">
+          <a class="button primary" href="https://REPLACE-ME.lemonsqueezy.com/buy/REPLACE-ME">Buy RamClean</a>
+          <a class="button" href="download/RamClean.dmg">Try it free</a>
+        </div>
+        <p class="small">Checkout and tax are handled by Lemon Squeezy, our reseller and merchant of record.</p>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap narrow">
+        <h2>Why isn't it on the Mac App Store?</h2>
+        <p>App Store apps must run in Apple's sandbox, and a sandboxed app can't quit other apps, which is RamClean's whole job. So RamClean is sold directly, signed with an Apple Developer ID and notarized by Apple, and updates itself securely.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span>© 2026 Amal Mehta</span>
+      <span><a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="refund.html">Refunds</a> · <a href="mailto:support@REPLACE-ME.example.com">Support</a></span>
+    </div>
+  </footer>
+</body>
+</html>

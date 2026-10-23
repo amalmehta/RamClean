@@ -3,15 +3,18 @@ import RamCleanCore
 import ServiceManagement
 import SwiftUI
 
+enum SettingsTab: Hashable { case general, thresholds, protection, data, licence }
+
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        TabView {
-            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
-            ThresholdSettings().tabItem { Label("Thresholds", systemImage: "slider.horizontal.3") }
-            ProtectionSettings().tabItem { Label("Protection", systemImage: "lock.shield") }
-            DataSettings().tabItem { Label("Data", systemImage: "externaldrive") }
+        TabView(selection: $model.settingsTab) {
+            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }.tag(SettingsTab.general)
+            ThresholdSettings().tabItem { Label("Thresholds", systemImage: "slider.horizontal.3") }.tag(SettingsTab.thresholds)
+            ProtectionSettings().tabItem { Label("Protection", systemImage: "lock.shield") }.tag(SettingsTab.protection)
+            DataSettings().tabItem { Label("Data", systemImage: "externaldrive") }.tag(SettingsTab.data)
+            LicenceSettings().tabItem { Label("Licence", systemImage: "key") }.tag(SettingsTab.licence)
         }
         .frame(width: 560, height: 470)
     }
@@ -19,6 +22,7 @@ struct SettingsView: View {
 
 private struct GeneralSettings: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var updater = Updater.shared
     /// Re-checked every second, so the row flips to "On" as soon as you grant access.
     @State private var trusted = AXIsProcessTrusted()
     @State private var login = SMAppService.mainApp.status
@@ -58,6 +62,11 @@ private struct GeneralSettings: View {
             }
             Text("RamClean always asks before quitting the app you're using. With Accessibility access it also asks before quitting an app with unsaved documents.")
                 .font(.caption).foregroundStyle(.secondary)
+            Toggle("Check for updates automatically", isOn: Binding(get: { updater.automaticallyChecks }, set: { updater.automaticallyChecks = $0 }))
+                .disabled(!updater.isConfigured)
+            LabeledContent(updater.isConfigured ? "Updates are signed and checked against RamClean's update feed" : "Updates aren't set up in this copy yet") {
+                Button("Check for Updates…") { updater.checkForUpdates() }.disabled(!updater.canCheck)
+            }
         }
         .formStyle(.grouped)
         .onReceive(recheck) { _ in
@@ -210,6 +219,101 @@ private struct DataSettings: View {
         .formStyle(.grouped)
         .confirmationDialog("Delete all recorded habits and the activity log?", isPresented: $confirmClear) {
             Button("Clear history", role: .destructive) { model.clearHabits() }
+        }
+    }
+}
+
+/// Trial days left, licensed, offline or expired; Buy; and the licence key.
+private struct LicenceSettings: View {
+    @EnvironmentObject var model: AppModel
+    @State private var key = ""
+    @State private var message: String?
+    @State private var busy = false
+    @State private var confirmDeactivate = false
+    @State private var deactivateFailed = false
+
+    var body: some View {
+        let state = model.licence, config = model.licensing.config
+        Form {
+            Section {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: LicenceBadge.symbol(state)).font(.title).foregroundStyle(LicenceBadge.tint(state))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(state.title).font(.headline)
+                        Text(state.detail(config)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                if !state.isLicensed {
+                    Button("Buy \(config.name) – \(config.price)") { model.buy() }.buttonStyle(.borderedProminent)
+                }
+                if let problem = model.licenceProblem {
+                    Text(problem).font(.callout).foregroundStyle(.orange)
+                }
+            }
+            if let r = model.licenceRecord {
+                Section("Licence key") {
+                    LabeledContent("Key", value: r.maskedKey)
+                    if let email = r.customerEmail { LabeledContent("Registered to", value: email) }
+                    LabeledContent("Last checked", value: r.lastValidated.formatted(date: .abbreviated, time: .shortened))
+                    HStack {
+                        Button("Check Now") { run { await model.checkLicence(); return nil } }
+                        Spacer()
+                        Button("Deactivate on This Mac…") { confirmDeactivate = true }
+                    }
+                    .disabled(busy)
+                    if deactivateFailed {
+                        Button("Remove the Key from This Mac Anyway", role: .destructive) {
+                            model.forgetLicence()
+                            deactivateFailed = false
+                            message = nil
+                        }
+                    }
+                    Text("Deactivating frees this Mac's activation, so you can use the key on another Mac.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                Section("Licence key") {
+                    TextField("Key", text: $key, prompt: Text("Paste the key from your receipt email"))
+                        .font(.body.monospaced())
+                        .onSubmit(activate)
+                    Button("Activate", action: activate).disabled(busy || key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Text("Activating sends the key and this Mac's name to Lemon Squeezy, the licence server. RamClean re-checks the key about once a day and keeps working offline for \(config.offlineGraceDays) days.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if busy { ProgressView().controlSize(.small) }
+            if let message { Text(message).font(.callout).foregroundStyle(.red) }
+            Link("Website, privacy and refunds", destination: config.websiteURL).font(.caption)
+        }
+        .formStyle(.grouped)
+        .confirmationDialog("Deactivate RamClean on this Mac?", isPresented: $confirmDeactivate) {
+            Button("Deactivate", role: .destructive) {
+                run {
+                    let error = await model.deactivateLicence()
+                    deactivateFailed = error != nil
+                    return error
+                }
+            }
+        } message: {
+            Text("Quitting apps, clearing space and learning will need a licence again on this Mac.")
+        }
+    }
+
+    private func activate() {
+        let k = key
+        run {
+            let error = await model.activateLicence(k)
+            if error == nil { key = "" }
+            return error
+        }
+    }
+
+    private func run(_ work: @escaping @MainActor () async -> String?) {
+        busy = true
+        message = nil
+        Task {
+            message = await work()
+            busy = false
         }
     }
 }

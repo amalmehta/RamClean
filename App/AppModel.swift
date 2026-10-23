@@ -31,6 +31,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var diskScanStep: String?
     /// Paths being moved off the Mac right now.
     @Published private(set) var movingPaths: Set<String> = []
+    /// Items whose cleanup command (brew cleanup, simctl delete unavailable) is running.
+    @Published private(set) var cleaningPaths: Set<String> = []
     /// Set by "Show recommendations" on an alert; the Overview opens that bar's list.
     @Published var requestedPanel: UsagePanel?
     /// Opens the main window; provided by a SwiftUI view that has `openWindow`.
@@ -709,6 +711,42 @@ final class AppModel: ObservableObject {
         refreshEvents()
         tick()
         return nil
+    }
+
+    /// Runs an item's own cleanup command (e.g. `xcrun simctl delete unavailable`) in the background
+    /// and logs it. Calls back on the main thread with an error message or nil.
+    func runCleanup(_ item: DiskItem, done: @escaping (String?) -> Void) {
+        guard let command = item.cleanupCommand, let text = item.cleanupCommandText else {
+            done("RamClean doesn't have a command for this one."); return
+        }
+        guard allowed("Cleaning up") else { done(nil); return }
+        cleaningPaths.insert(item.path)
+        DispatchQueue.global(qos: .userInitiated).async {
+            var failure: String?
+            do {
+                let result = try ToolRunner.run(command, timeout: 600)
+                if result.status != 0 {
+                    let tail = result.output.split(separator: "\n").suffix(4).joined(separator: "\n")
+                    failure = "\(text) stopped with code \(result.status)." + (tail.isEmpty ? "" : "\n\n\(tail)")
+                }
+            } catch is ToolRunner.Timeout {
+                failure = "\(text) was still running after 10 minutes, so RamClean stopped it."
+            } catch {
+                failure = error.localizedDescription
+            }
+            DispatchQueue.main.async {
+                self.cleaningPaths.remove(item.path)
+                if failure == nil {
+                    self.habitStore.log(.cleanedUp, key: "disk", name: item.name,
+                                        detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) · \(text)", at: Date())
+                    self.diskReport?.items.removeAll { $0.id == item.id }
+                    self.saveDiskReport()
+                    self.refreshEvents()
+                    self.tick()
+                }
+                done(failure)
+            }
+        }
     }
 
     private func saveDiskReport() {

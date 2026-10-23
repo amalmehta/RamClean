@@ -300,6 +300,7 @@ final class RecommendationTests: XCTestCase {
     func scanner() -> DiskScanner {
         var sc = DiskScanner(home: home)
         sc.minCacheBytes = 2 * 1_048_576
+        sc.minLibraryCacheBytes = 2 * 1_048_576
         sc.largeFileBytes = 3 * 1_048_576
         sc.minArtifactBytes = 2 * 1_048_576
         sc.oldDownloadBytes = 2 * 1_048_576
@@ -307,13 +308,18 @@ final class RecommendationTests: XCTestCase {
         sc.appFolders = [home.appendingPathComponent("Apps")]
         sc.appLastUsed = { _ in nil }
         sc.useSpotlight = false // temp folders aren't indexed; exercise the folder walk
+        sc.toolPath = { "/fake/bin/\($0)" }
+        sc.unavailableSimulators = { [] }
         return sc
     }
 
     func testDiskScanFindsCachesLargeFilesAndTrash() throws {
         try write("Library/Developer/Xcode/DerivedData/App-abc/Build/big.o", mb: 6)
         try write("Library/Developer/Xcode/Archives/2026/App.xcarchive/x", mb: 3)
-        try write("Library/Developer/CoreSimulator/Devices/ABC/data", mb: 3)
+        try write("Library/Developer/CoreSimulator/Devices/ABC/data/disk", mb: 3)
+        try write("Library/Developer/CoreSimulator/Devices/LIVE/data/disk", mb: 3)
+        try write("Library/Caches/Homebrew/downloads/x.tar.gz", mb: 3)
+        try write("Library/pnpm/store/v3/files/ab", mb: 3)
         try write("Library/Caches/com.spotify.client/Data/blob", mb: 4)
         try write("Library/Caches/tiny/blob", mb: 1)
         try write(".cache/huggingface/model.bin", mb: 5)
@@ -323,13 +329,26 @@ final class RecommendationTests: XCTestCase {
         try write("Library/Mail/huge.mbox", mb: 9)          // inside ~/Library: never a "large file"
         try write(".Trash/old.mov", mb: 2)
 
-        let report = scanner().scan()
+        var sc = scanner()
+        sc.minArtifactBytes = 2 * 1_048_576
+        sc.unavailableSimulators = { [self.home.appendingPathComponent("Library/Developer/CoreSimulator/Devices/ABC")] }
+        let report = sc.scan()
         func item(_ name: String) -> DiskItem? { report.items.first { $0.name == name } }
 
         XCTAssertEqual(item("Xcode build data")?.kind, .cache)
         XCTAssertTrue(item("Xcode build data")!.canTrash)
+        XCTAssertNotNil(item("Xcode build data")?.lastModified)
         XCTAssertNotNil(item("Xcode archives")?.caution)
-        XCTAssertEqual(item("Simulator devices")?.canTrash, false)
+        let sims = item("Unavailable simulators")
+        XCTAssertEqual(sims?.canTrash, false)
+        XCTAssertEqual(sims?.cleanupCommandText, "xcrun simctl delete unavailable")
+        XCTAssertEqual(sims?.cleanupCommand?.first, "/fake/bin/xcrun")
+        XCTAssertLessThan(sims?.bytes ?? 0, 6 * 1_048_576, "only the unavailable device is counted")
+        XCTAssertEqual(item("Homebrew cache")?.cleanupCommandText, "brew cleanup --prune=all")
+        XCTAssertEqual(item("Homebrew cache")?.canTrash, false)
+        XCTAssertNil(item("Homebrew"), "not listed again as a plain app cache")
+        XCTAssertEqual(item("pnpm store")?.canTrash, true)
+        XCTAssertGreaterThan(report.commandBytes, 5 * 1_048_576)
         XCTAssertEqual(item("Spotify client cache")?.kind, .cache)
         XCTAssertNil(item("tiny"), "below the cache threshold")
         XCTAssertEqual(item("huggingface")?.kind, .cache)
@@ -343,6 +362,46 @@ final class RecommendationTests: XCTestCase {
         XCTAssertEqual(item("Trash")?.canTrash, false)
         XCTAssertEqual(report.items.map { $0.bytes ?? 0 }, report.items.map { $0.bytes ?? 0 }.sorted(by: >))
         XCTAssertGreaterThan(report.reclaimableBytes, 18 * 1_048_576)
+    }
+
+    func testLibraryCachesNeedMoreSpaceAndBrewFallsBackToTrash() throws {
+        try write("Library/Caches/com.example.mid/blob", mb: 3)
+        try write("Library/Caches/Homebrew/downloads/x.tar.gz", mb: 3)
+        var sc = scanner()
+        sc.minLibraryCacheBytes = 5 * 1_048_576
+        sc.toolPath = { _ in nil } // Homebrew not installed
+        let report = sc.scan()
+        XCTAssertNil(report.items.first { $0.name == "Example mid cache" }, "under the ~/Library/Caches threshold")
+        let brew = report.items.first { $0.name == "Homebrew cache" }
+        XCTAssertNil(brew?.cleanupCommand)
+        XCTAssertEqual(brew?.canTrash, true)
+    }
+
+    func testStaleNodeModulesWalkSkipsLibraryHiddenAndDeepFolders() throws {
+        func project(_ rel: String, days: Double) throws {
+            try write("\(rel)/package.json", mb: 0)
+            try write("\(rel)/node_modules/dep/index.js", mb: 3)
+            for f in ["\(rel)/package.json", "\(rel)/node_modules/dep/index.js", "\(rel)/node_modules/dep", "\(rel)/node_modules", rel] {
+                try age(f, days: days)
+            }
+        }
+        try project("Work/2024/stale", days: 45)
+        try project("Work/2024/recent", days: 10)
+        try project("Library/Thing/stale", days: 45)
+        try project(".hidden/stale", days: 45)
+        try project("a/b/c/d/e/f/g/h/stale", days: 45)
+        // A global npm install (no package.json beside it), not a project's dependencies.
+        try write("sdk/node/lib/node_modules/npm/index.js", mb: 3)
+        for f in ["sdk/node/lib/node_modules/npm/index.js", "sdk/node/lib/node_modules/npm", "sdk/node/lib/node_modules"] { try age(f, days: 45) }
+        var sc = scanner()
+        sc.maxNodeModulesDepth = 6
+        let found = sc.staleNodeModules(isCancelled: { false })
+        XCTAssertEqual(found.map(\.name), ["stale › node_modules"])
+        XCTAssertTrue(found[0].path.hasSuffix("Work/2024/stale/node_modules"))
+        XCTAssertNotNil(found[0].lastModified)
+        XCTAssertTrue(found[0].canTrash)
+        // Found once even though it's also a project the build-files step looks at.
+        XCTAssertEqual(sc.scan().items.filter { $0.path == found[0].path }.count, 1)
     }
 
     func testStaleProjectsAppsAndDownloadsButNeverActiveWork() throws {
@@ -441,7 +500,7 @@ final class RecommendationTests: XCTestCase {
         let gb: Int64 = 1 << 30
         let r = DiskReport(items: [
             DiskItem(name: "uv", path: "/c/uv", bytes: 5 * gb, kind: .cache, reason: ""),
-            DiskItem(name: "Simulator devices", path: "/c/sim", bytes: 7 * gb, kind: .cache, reason: "", canTrash: false),
+            DiskItem(name: "Docker disk image", path: "/c/sim", bytes: 7 * gb, kind: .cache, reason: "", canTrash: false),
             DiskItem(name: "npm", path: "/c/npm", bytes: 1 * gb, kind: .cache, reason: ""),
             DiskItem(name: "site › node_modules", path: "/p/nm", bytes: 2 * gb, kind: .buildArtifact, reason: ""),
             DiskItem(name: "trip.mov", path: "/m/trip.mov", bytes: 12 * gb, kind: .largeFile, reason: "", suggestMove: true),

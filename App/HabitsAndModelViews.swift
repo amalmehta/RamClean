@@ -89,6 +89,7 @@ struct ActivityView: View {
         case .diskWarning: return "Low space:"
         case .movedToTrash: return "Moved to Trash:"
         case .movedOffMac: return "Moved off this Mac:"
+        case .cleanedUp: return "Cleaned up:"
         case .thresholdAlert: return "Alert:"
         }
     }
@@ -107,6 +108,7 @@ struct ActivityView: View {
         case .diskWarning: return "internaldrive"
         case .movedToTrash: return "trash"
         case .movedOffMac: return "externaldrive"
+        case .cleanedUp: return "sparkles"
         case .thresholdAlert: return "exclamationmark.triangle"
         }
     }

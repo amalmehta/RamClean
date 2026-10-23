@@ -36,7 +36,7 @@ public struct HabitStats: Equatable, Sendable {
 }
 
 public enum HabitEventKind: String, Codable, Sendable {
-    case activated, launched, terminated, suggested, quitBySuggestion, kept, alwaysKept, forceQuit, regretRelaunch, stayedClosed, neverQuit, restarted, diskWarning, movedToTrash, movedOffMac, thresholdAlert
+    case activated, launched, terminated, suggested, quitBySuggestion, kept, alwaysKept, forceQuit, regretRelaunch, stayedClosed, neverQuit, restarted, diskWarning, movedToTrash, movedOffMac, cleanedUp, thresholdAlert
 }
 
 public struct HabitEvent: Codable, Equatable, Sendable, Identifiable {

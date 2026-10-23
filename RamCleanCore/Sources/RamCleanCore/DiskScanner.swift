@@ -31,12 +31,25 @@ public struct DiskItem: Identifiable, Equatable, Sendable, Codable {
     public var lastOpened: Date?
     /// Not opened in a long time: worth moving to an external drive or cloud storage.
     public var suggestMove: Bool
+    /// When it last changed (for a folder: the folder itself or anything directly inside it).
+    public var lastModified: Date?
+    /// The tool's own command that frees this space, full executable path first
+    /// (e.g. `xcrun simctl delete unavailable`). Run instead of moving anything to the Trash.
+    public var cleanupCommand: [String]?
     public var id: String { path }
 
     public init(name: String, path: String, bytes: Int64?, kind: Kind, reason: String, caution: String? = nil,
-                canTrash: Bool = true, lastOpened: Date? = nil, suggestMove: Bool = false) {
+                canTrash: Bool = true, lastOpened: Date? = nil, suggestMove: Bool = false,
+                lastModified: Date? = nil, cleanupCommand: [String]? = nil) {
         self.name = name; self.path = path; self.bytes = bytes; self.kind = kind; self.reason = reason
         self.caution = caution; self.canTrash = canTrash; self.lastOpened = lastOpened; self.suggestMove = suggestMove
+        self.lastModified = lastModified; self.cleanupCommand = cleanupCommand
+    }
+
+    /// The cleanup command as you'd type it: "brew cleanup --prune=all".
+    public var cleanupCommandText: String? {
+        guard let c = cleanupCommand, let tool = c.first else { return nil }
+        return ([(tool as NSString).lastPathComponent] + c.dropFirst()).joined(separator: " ")
     }
 }
 
@@ -51,6 +64,11 @@ public struct DiskReport: Equatable, Sendable, Codable {
         items.filter(\.canTrash).reduce(0) { $0 + ($1.bytes ?? 0) }
     }
 
+    /// What running every item's cleanup command (brew cleanup, simctl delete unavailable) would free.
+    public var commandBytes: Int64 {
+        items.filter { $0.cleanupCommand != nil }.reduce(0) { $0 + ($1.bytes ?? 0) }
+    }
+
     public func items(_ kind: DiskItem.Kind) -> [DiskItem] { items.filter { $0.kind == kind } }
 
     /// This report without anything that has since been deleted or moved, so an older scan
@@ -59,10 +77,10 @@ public struct DiskReport: Equatable, Sendable, Codable {
         DiskReport(items: items.filter { exists($0.path) }, scannedAt: scannedAt)
     }
 
-    /// Something you can act on to win space: rebuildable or unused items you could trash,
-    /// big old files to move off the Mac, and the Trash itself (empty it in Finder).
+    /// Something you can act on to win space: rebuildable or unused items you could trash or
+    /// clear with a tool's own command, big old files to move off the Mac, and the Trash itself (empty it in Finder).
     static func isWin(_ i: DiskItem) -> Bool {
-        (i.bytes ?? 0) > 0 && (i.canTrash && i.kind != .largeFile || i.suggestMove || i.kind == .trash)
+        (i.bytes ?? 0) > 0 && (i.canTrash && i.kind != .largeFile || i.cleanupCommand != nil || i.suggestMove || i.kind == .trash)
     }
 
     /// Space you could win per category, biggest first: the at-a-glance answer to "where's my space?".
@@ -90,6 +108,10 @@ public struct DiskReport: Equatable, Sendable, Codable {
 public struct DiskScanner {
     public var home: URL
     public var minCacheBytes: Int64 = 200 * 1_048_576
+    /// ~/Library/Caches holds a folder for nearly every app, so only the big ones are listed.
+    public var minLibraryCacheBytes: Int64 = 500 * 1_048_576
+    /// How many folders below the home folder to look for node_modules.
+    public var maxNodeModulesDepth = 8
     public var largeFileBytes: Int64 = 1_073_741_824
     public var maxLargeFiles = 30
     /// Not opened for this long = no use anymore (apps, downloads, large files to move off).
@@ -109,6 +131,10 @@ public struct DiskScanner {
     /// Ask Spotlight for large files and code projects instead of walking the home folder
     /// (seconds instead of many minutes). Falls back to walking if Spotlight can't answer.
     public var useSpotlight = true
+    /// Full path of a command-line tool (brew, xcrun), or nil if it isn't installed; replaceable for tests.
+    public var toolPath: (String) -> String? = DiskScanner.findTool
+    /// Folders of simulator devices whose runtime is gone; replaceable for tests.
+    public var unavailableSimulators: () -> [URL] = DiskScanner.listUnavailableSimulators
     /// Sizes remembered from earlier scans, reused when a folder hasn't changed (nil: always measure).
     public var sizeCache: SizeCache?
     /// Stay out of Desktop, Documents and Downloads. Reading them can raise a macOS permission
@@ -142,6 +168,9 @@ public struct DiskScanner {
         var reason: String
         var caution: String? = nil
         var canTrash = true
+        /// The tool's own cleanup command, tool name first. Used instead of the Trash when the
+        /// tool is installed; without it, the folder goes to the Trash like any other cache.
+        var command: [String]? = nil
     }
 
     /// Developer and tool caches that are safe to remove because they come back on their own.
@@ -153,10 +182,18 @@ public struct DiskScanner {
         Known(path: "Library/Developer/Xcode/watchOS DeviceSupport", name: "watchOS device support", reason: "Debug symbols; downloaded again when you connect that device"),
         Known(path: "Library/Developer/Xcode/macOS DeviceSupport", name: "macOS device support", reason: "Debug symbols; downloaded again when needed"),
         Known(path: "Library/Developer/CoreSimulator/Caches", name: "Simulator caches", reason: "Rebuilt automatically"),
-        Known(path: "Library/Developer/CoreSimulator/Devices", name: "Simulator devices",
-              reason: "Remove unused simulators in Xcode › Window › Devices and Simulators, or run: xcrun simctl delete unavailable",
-              canTrash: false),
         Known(path: ".npm/_cacache", name: "npm cache", reason: "Downloaded again when needed"),
+        Known(path: "Library/Caches/Yarn", name: "Yarn cache", reason: "Downloaded again when needed"),
+        Known(path: ".yarn/berry/cache", name: "Yarn cache", reason: "Downloaded again when needed"),
+        Known(path: "Library/pnpm/store", name: "pnpm store", reason: "Downloaded again when needed",
+              caution: "Projects installed with pnpm share files with it; that part comes back only once their node_modules go too"),
+        Known(path: ".local/share/pnpm/store", name: "pnpm store", reason: "Downloaded again when needed",
+              caution: "Projects installed with pnpm share files with it; that part comes back only once their node_modules go too"),
+        Known(path: ".pnpm-store", name: "pnpm store", reason: "Downloaded again when needed",
+              caution: "Projects installed with pnpm share files with it; that part comes back only once their node_modules go too"),
+        Known(path: "Library/Caches/Homebrew", name: "Homebrew cache",
+              reason: "Downloaded packages, fetched again when needed. Homebrew's own cleanup clears them and old versions of what you've upgraded",
+              command: ["brew", "cleanup", "--prune=all"]),
         Known(path: ".gradle/caches", name: "Gradle cache", reason: "Downloaded again when needed"),
         Known(path: ".cargo/registry", name: "Cargo registry cache", reason: "Downloaded again when needed"),
         Known(path: "Library/Containers/com.docker.docker/Data/vms", name: "Docker disk image",
@@ -175,7 +212,7 @@ public struct DiskScanner {
 
         // Caches, unused apps, old downloads, the Trash and the Spotlight queries don't depend
         // on each other, so they run at the same time; the total is the slowest one, not the sum.
-        var claimed: [String] = [], downloads: [DiskItem] = [], raw: SpotlightResults?
+        var claimed: [String] = [], downloads: [DiskItem] = [], nodeModules: [DiskItem] = [], raw: SpotlightResults?
         withoutActuallyEscaping(progress) { progress in
             withoutActuallyEscaping(isCancelled) { isCancelled in
                 progress("caches, apps, downloads and Spotlight", [])
@@ -191,6 +228,13 @@ public struct DiskScanner {
                     add("old downloads", downloads, report: progress)
                 }
                 queue.async(group: group) { add("the Trash", self.trashItem().map { [$0] } ?? [], report: progress) }
+                queue.async(group: group) {
+                    add("simulators", self.unavailableSimulatorItem(isCancelled: isCancelled).map { [$0] } ?? [], report: progress)
+                }
+                queue.async(group: group) {
+                    nodeModules = self.staleNodeModules(isCancelled: isCancelled)
+                    add("node_modules", nodeModules, report: progress)
+                }
                 queue.async(group: group) { raw = self.useSpotlight ? self.spotlightQuery() : nil }
                 group.wait()
             }
@@ -202,7 +246,8 @@ public struct DiskScanner {
         let found = raw.map { spotlightFilter($0, excluding: claimed, skipFiles: skipFiles) }
             ?? walkHome(excluding: claimed, skipFiles: skipFiles, isCancelled: isCancelled)
         add("large files", found.largeFiles, report: progress)
-        add("build files in old projects", buildArtifacts(in: found.projects.filter { !isProtected($0) }, isCancelled: isCancelled),
+        add("build files in old projects", buildArtifacts(in: found.projects.filter { !isProtected($0) },
+                                                          listed: Set(nodeModules.map { Self.realPath($0.path) }), isCancelled: isCancelled),
             report: progress)
 
         return DiskReport(items: items.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }, scannedAt: Date())
@@ -211,28 +256,35 @@ public struct DiskScanner {
     /// Developer, app and tool caches over `minCacheBytes`, all measured in parallel.
     /// `onFound` is called (from any thread) for each one as soon as it's measured.
     func caches(isCancelled: () -> Bool, onFound: (DiskItem) -> Void = { _ in }) -> (items: [DiskItem], claimed: [String]) {
-        var candidates: [(url: URL, make: (Int64) -> DiskItem)] = []
+        var candidates: [(url: URL, min: Int64, make: (Int64) -> DiskItem)] = []
+        var knownPaths = Set<String>()
         for k in Self.known {
             let url = home.appendingPathComponent(k.path)
             guard exists(url) else { continue }
-            candidates.append((url, { DiskItem(name: k.name, path: url.path, bytes: $0, kind: .cache, reason: k.reason,
-                                               caution: k.caution, canTrash: k.canTrash) }))
+            knownPaths.insert(Self.realPath(url.path))
+            // The tool's own cleanup when it's installed, otherwise the Trash.
+            let command = k.command.flatMap { c in toolPath(c[0]).map { [$0] + c.dropFirst() } }
+            candidates.append((url, minCacheBytes, {
+                DiskItem(name: k.name, path: url.path, bytes: $0, kind: .cache, reason: k.reason, caution: k.caution,
+                         canTrash: k.canTrash && command == nil, lastModified: Self.lastModified(url), cleanupCommand: command)
+            }))
         }
-        for (folder, reason) in [("Library/Caches", "App cache; the app rebuilds it as needed"),
-                                 (".cache", "Tool cache (e.g. downloaded models or packages); downloaded again when needed")] {
+        for (folder, min, reason) in [("Library/Caches", minLibraryCacheBytes, "App cache; the app rebuilds it as needed"),
+                                      (".cache", minCacheBytes, "Tool cache (e.g. downloaded models or packages); downloaded again when needed")] {
             let parent = home.appendingPathComponent(folder)
-            for child in (try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)) ?? [] {
-                candidates.append((child, { DiskItem(name: Self.prettyCacheName(child.lastPathComponent), path: child.path,
-                                                     bytes: $0, kind: .cache, reason: reason) }))
+            for child in (try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)) ?? []
+            where !knownPaths.contains(Self.realPath(child.path)) {
+                candidates.append((child, min, { DiskItem(name: Self.prettyCacheName(child.lastPathComponent), path: child.path,
+                                                          bytes: $0, kind: .cache, reason: reason, lastModified: Self.lastModified(child)) }))
             }
         }
         let sizes = withoutActuallyEscaping(onFound) { onFound in
             self.sizes(candidates.map(\.url), isCancelled: isCancelled, onEach: { i, size in
-                if size >= self.minCacheBytes { onFound(candidates[i].make(size)) }
+                if size >= candidates[i].min { onFound(candidates[i].make(size)) }
             })
         }
         var items: [DiskItem] = [], claimed: [String] = []
-        for (c, size) in zip(candidates, sizes) where size >= minCacheBytes {
+        for (c, size) in zip(candidates, sizes) where size >= c.min {
             items.append(c.make(size))
             claimed.append(c.url.path)
         }
@@ -250,6 +302,78 @@ public struct DiskScanner {
                             ? "macOS doesn't let RamClean measure the Trash. Empty it in Finder to free its space."
                             : "Files you've already deleted still take space until you empty the Trash in Finder.",
                         canTrash: false)
+    }
+
+    /// Simulator devices whose runtime is no longer installed: they can't boot, and Xcode's own
+    /// `xcrun simctl delete unavailable` removes them. One item for all of them.
+    func unavailableSimulatorItem(isCancelled: () -> Bool) -> DiskItem? {
+        let devices = home.appendingPathComponent("Library/Developer/CoreSimulator/Devices")
+        // Checked first: on a Mac without Xcode, running xcrun offers to install the developer tools.
+        guard exists(devices), let xcrun = toolPath("xcrun") else { return nil }
+        let dirs = unavailableSimulators().filter(exists)
+        let size = sizes(dirs, isCancelled: isCancelled).reduce(0, +)
+        guard size >= minArtifactBytes else { return nil }
+        return DiskItem(name: "Unavailable simulators", path: devices.path, bytes: size, kind: .cache,
+                        reason: "\(dirs.count) simulator device\(dirs.count == 1 ? "" : "s") for iOS, watchOS or other runtimes that are no longer installed; they can't be started",
+                        canTrash: false, lastModified: dirs.compactMap(Self.lastModified).max(),
+                        cleanupCommand: [xcrun, "simctl", "delete", "unavailable"])
+    }
+
+    /// node_modules folders under the home folder (not ~/Library or hidden folders, at most
+    /// `maxNodeModulesDepth` deep) that haven't changed in `activeDays`, beside a project that hasn't either.
+    /// Spotlight lists them in under a second; walking the folders instead takes tens of seconds.
+    func staleNodeModules(isCancelled: () -> Bool) -> [DiskItem] {
+        var found: [(dir: URL, idle: Date?)] = []
+        for dir in (useSpotlight ? spotlightNodeModules() : nil) ?? walkForNodeModules(isCancelled: isCancelled) where !isCancelled() {
+            let project = dir.deletingLastPathComponent()
+            // Only a project's own dependencies: not a global install like …/lib/node_modules.
+            guard exists(project.appendingPathComponent("package.json")) else { continue }
+            let modified = Self.lastModified(dir)
+            if isActive(modified) || isActive(lastActivity(ofProject: project)) { continue } // installed lately, or a live project
+            found.append((dir, modified))
+        }
+        let sizes = sizes(found.map(\.dir), isCancelled: isCancelled)
+        return zip(found, sizes).filter { $0.1 >= minArtifactBytes }.map { f, size in
+            let idle = daysSince(f.idle).map { "\(HumanFormat.duration(minutes: $0 * 1440)) ago" } ?? "a long time ago"
+            return DiskItem(name: "\(f.dir.deletingLastPathComponent().lastPathComponent) › node_modules", path: f.dir.path, bytes: size,
+                            kind: .buildArtifact,
+                            reason: "Last changed \(idle). Dependency files; they come back with npm install (or yarn / pnpm install)",
+                            lastModified: f.idle)
+        }.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }
+    }
+
+    /// Top-level node_modules folders from Spotlight's index, within the same limits as the walk.
+    /// Nil when Spotlight can't run the query.
+    func spotlightNodeModules() -> [URL]? {
+        guard let items = Spotlight.query("kMDItemFSName == \"node_modules\"", scope: home) else { return nil }
+        let homePath = Self.realPath(home.path)
+        return items.compactMap { Spotlight.string($0, kMDItemPath) }.compactMap { path in
+            guard path.hasPrefix(homePath + "/"), !isProtected(path) else { return nil }
+            let parts = path.dropFirst(homePath.count + 1).split(separator: "/")
+            guard parts.count <= maxNodeModulesDepth, !["Library", "Applications"].contains(parts[0]),
+                  !parts.contains(where: { $0.hasPrefix(".") }), parts.dropLast().allSatisfy({ $0 != "node_modules" }) else { return nil }
+            return URL(fileURLWithPath: path)
+        }
+    }
+
+    /// The same folders found by walking the home folder, when Spotlight can't answer.
+    func walkForNodeModules(isCancelled: () -> Bool) -> [URL] {
+        let root = URL(fileURLWithPath: Self.realPath(home.path), isDirectory: true)
+        guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey],
+                                                     options: [.skipsHiddenFiles, .skipsPackageDescendants],
+                                                     errorHandler: { _, _ in true }) else { return [] }
+        let skip = Set(["Library", "Applications"].map { Self.realPath(home.appendingPathComponent($0).path) })
+        var found: [URL] = []
+        for case let url as URL in e {
+            if isCancelled() { break }
+            guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            let name = url.lastPathComponent
+            if e.level >= maxNodeModulesDepth || skip.contains(url.path) || isProtected(url.path) || Self.artifacts[name] != nil {
+                e.skipDescendants() // other build output never holds a project of its own
+            }
+            if name == "node_modules" && !skip.contains(url.path) && !isProtected(url.path) { found.append(url) }
+        }
+        return found
     }
 
     /// Folders that hold rebuildable build or dependency output, and how to get them back.
@@ -364,7 +488,8 @@ public struct DiskScanner {
     }
 
     /// Dependency and build folders inside projects you haven't touched in `activeDays`.
-    func buildArtifacts(in projects: Set<String>, isCancelled: () -> Bool) -> [DiskItem] {
+    /// `listed` holds folders another step already found (node_modules), so they aren't listed twice.
+    func buildArtifacts(in projects: Set<String>, listed: Set<String> = [], isCancelled: () -> Bool) -> [DiskItem] {
         let fm = FileManager.default
         var candidates: [(dir: URL, make: (Int64) -> DiskItem)] = []
         for path in projects.sorted() where !isCancelled() {
@@ -374,13 +499,13 @@ public struct DiskScanner {
             for (folder, rebuild) in Self.artifacts {
                 let dir = root.appendingPathComponent(folder)
                 var isDir: ObjCBool = false
-                guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+                guard !listed.contains(Self.realPath(dir.path)), fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
                 let written = try? dir.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
                 if isActive(written) { continue } // a build may be running
                 let idle = daysSince(activity).map { "\(HumanFormat.duration(minutes: $0 * 1440)) ago" } ?? "a long time ago"
                 candidates.append((dir, { DiskItem(name: "\(root.lastPathComponent) › \(folder)", path: dir.path, bytes: $0, kind: .buildArtifact,
                                                    reason: "Project last changed \(idle). These are build or dependency files; they come back with \(rebuild)",
-                                                   lastOpened: activity) }))
+                                                   lastOpened: activity, lastModified: written) }))
             }
         }
         let sizes = sizes(candidates.map(\.dir), isCancelled: isCancelled)
@@ -464,6 +589,33 @@ public struct DiskScanner {
     }
 
     private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
+
+    /// The newest modification date of a folder and what's directly inside it (one level, so it's
+    /// cheap; installs and cache writes nearly always touch that level). A file's own date for a file.
+    static func lastModified(_ url: URL) -> Date? {
+        let key: Set<URLResourceKey> = [.contentModificationDateKey]
+        let own = try? url.resourceValues(forKeys: key).contentModificationDate
+        let children = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: Array(key))) ?? []
+        return ([own] + children.map { try? $0.resourceValues(forKeys: key).contentModificationDate }).compactMap { $0 }.max()
+    }
+
+    /// Where a command-line tool is installed, looking where Homebrew and Xcode put them
+    /// (an app started from Finder doesn't get your shell's PATH).
+    public static func findTool(_ name: String) -> String? {
+        ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].map { "\($0)/\(name)" }
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Device folders from `xcrun simctl list devices unavailable -j`; empty if simctl can't run.
+    public static func listUnavailableSimulators() -> [URL] {
+        guard let xcrun = findTool("xcrun"),
+              let out = try? ToolRunner.run([xcrun, "simctl", "list", "devices", "unavailable", "-j"], timeout: 20),
+              out.status == 0,
+              let json = try? JSONSerialization.jsonObject(with: Data(out.output.utf8)) as? [String: Any],
+              let runtimes = json["devices"] as? [String: [[String: Any]]] else { return [] }
+        // dataPath is <device folder>/data.
+        return runtimes.values.joined().compactMap { ($0["dataPath"] as? String).map { URL(fileURLWithPath: $0).deletingLastPathComponent() } }
+    }
 
     /// Space a file or folder takes on disk. Folders are read with `getattrlistbulk`, which
     /// returns a whole directory's sizes in one call instead of one `stat` per file, and the
@@ -685,5 +837,34 @@ public final class SizeCache {
             lock.unlock()
         }
         return bytes
+    }
+}
+
+/// Runs a command-line tool and collects what it prints (output and errors together).
+public enum ToolRunner {
+    public struct Timeout: Error {}
+
+    /// Gives up after `timeout` seconds, stopping the tool, so a stuck one can't hang a scan or a cleanup.
+    public static func run(_ argv: [String], timeout: TimeInterval) throws -> (status: Int32, output: String) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: argv[0])
+        task.arguments = Array(argv.dropFirst())
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+        task.standardInput = FileHandle.nullDevice
+        let done = DispatchSemaphore(value: 0)
+        var data = Data()
+        try task.run()
+        DispatchQueue.global(qos: .utility).async {
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
+            done.signal()
+        }
+        if done.wait(timeout: .now() + timeout) == .timedOut {
+            task.terminate()
+            throw Timeout()
+        }
+        task.waitUntilExit()
+        return (task.terminationStatus, String(decoding: data, as: UTF8.self))
     }
 }

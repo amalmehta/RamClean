@@ -103,10 +103,12 @@ struct RecommendationRow: View {
     }
 }
 
-/// Popover for the Disk bar: rebuildable caches, large files and the Trash, each with Move to Trash.
+/// Popover for the Disk bar: rebuildable caches, large files and the Trash, each with Move to Trash
+/// or, for tools that have one, their own cleanup command.
 struct DiskRecommendations: View {
     @EnvironmentObject var model: AppModel
     @State private var pending: DiskItem?
+    @State private var pendingCleanup: DiskItem?
     @State private var pendingMove: (item: DiskItem, folder: URL, name: String)?
     @State private var error: String?
 
@@ -153,6 +155,12 @@ struct DiskRecommendations: View {
         } message: { item in
             Text("\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))). \(item.caution ?? item.reason). You can put it back from the Trash until you empty it.")
         }
+        .confirmationDialog(pendingCleanup.map { "Run “\($0.cleanupCommandText ?? "")”?" } ?? "", isPresented: Binding(
+            get: { pendingCleanup != nil }, set: { if !$0 { pendingCleanup = nil } }), presenting: pendingCleanup) { item in
+            Button("Run", role: .destructive) { model.runCleanup(item) { error = $0 } }
+        } message: { item in
+            Text("Frees about \(Format.bytes(UInt64(max(0, item.bytes ?? 0)))). \(item.caution ?? item.reason). This deletes them for good; they don't go to the Trash.")
+        }
         .confirmationDialog(pendingMove.map { "Move “\($0.item.name)” to \($0.name)?" } ?? "", isPresented: Binding(
             get: { pendingMove != nil }, set: { if !$0 { pendingMove = nil } })) {
             Button("Move") {
@@ -170,8 +178,8 @@ struct DiskRecommendations: View {
     }
 
     private func row(_ item: DiskItem) -> DiskRow {
-        DiskRow(item: item, moving: model.movingPaths.contains(item.path),
-                onTrash: { pending = item },
+        DiskRow(item: item, moving: model.movingPaths.contains(item.path), cleaning: model.cleaningPaths.contains(item.path),
+                onTrash: { pending = item }, onCleanup: { pendingCleanup = item },
                 onMove: { folder, name in pendingMove = (item, folder, name) })
     }
 
@@ -180,9 +188,10 @@ struct DiskRecommendations: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("What you could clear").font(.headline)
                 if let r = model.diskReport {
-                    Text("About \(Format.bytes(UInt64(r.reclaimableBytes))) can go to the Trash. Space comes back when you empty it.")
+                    Text("About \(Format.bytes(UInt64(r.reclaimableBytes))) can go to the Trash. Space comes back when you empty it."
+                         + (r.commandBytes > 0 ? " \(Format.bytes(UInt64(r.commandBytes))) more with the tools' own cleanup commands." : ""))
                         .font(.callout)
-                    Text("Scanned \(r.scannedAt.formatted(.relative(presentation: .named))). RamClean never empties the Trash or deletes anything itself.")
+                    Text("Scanned \(r.scannedAt.formatted(.relative(presentation: .named))). RamClean never empties the Trash, and runs a cleanup command only when you ask.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let step = model.diskScanStep {
@@ -206,7 +215,9 @@ struct DiskRecommendations: View {
 struct DiskRow: View {
     var item: DiskItem
     var moving: Bool
+    var cleaning: Bool
     var onTrash: () -> Void
+    var onCleanup: () -> Void
     var onMove: (URL, String) -> Void
 
     private var canMove: Bool { item.kind == .largeFile || item.kind == .oldDownload }
@@ -225,19 +236,31 @@ struct DiskRow: View {
                     }
                 }
                 Text(item.reason).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let command = item.cleanupCommandText {
+                    Text("Clean Up runs: \(command)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                }
                 if let c = item.caution {
                     Label(c, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Text(item.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
                     .font(.caption2).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
+                if let d = item.lastModified ?? item.lastOpened {
+                    Text("\(item.lastModified != nil ? "Modified" : "Opened") \(d.formatted(date: .abbreviated, time: .omitted))")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 6) {
-                if moving {
-                    HStack(spacing: 4) { ProgressView().controlSize(.small); Text("Moving…").font(.caption) }
+                if moving || cleaning {
+                    HStack(spacing: 4) { ProgressView().controlSize(.small); Text(moving ? "Moving…" : "Cleaning…").font(.caption) }
                 } else {
                     if canMove { moveMenu }
+                    if let command = item.cleanupCommandText {
+                        Button("Clean Up", action: onCleanup).controlSize(.small)
+                            .help("Runs \(command)")
+                            .accessibilityLabel("Clean up \(item.name) with \(command)")
+                    }
                     if item.canTrash {
                         Button(item.kind == .unusedApp ? "Uninstall" : "Move to Trash", action: onTrash).controlSize(.small)
                             .accessibilityLabel("Move \(item.name) to Trash")

@@ -191,7 +191,7 @@ final class AppModel: ObservableObject {
         let policy = SuggestionPolicy(prefs: prefs)
         if let pick = policy.pick(from: result, system: snapshot, lastNotified: lastNotified,
                                   lastAnyNotification: lastAnyNotification, now: now) {
-            suggest(pick, system: snapshot, now: now)
+            suggest(pick, now: now)
         }
         checkThresholds(snapshot, result, now: now)
         updateLicence()
@@ -295,14 +295,11 @@ final class AppModel: ObservableObject {
 
     // MARK: - Suggestions and answers
 
-    private func suggest(_ a: Assessment, system s: SystemSnapshot, now: Date) {
+    private func suggest(_ a: Assessment, now: Date) {
         lastNotified[a.group.habitKey] = now
         lastAnyNotification = now
-        let idle = Format.duration(minutes: a.features.minutesSinceActive)
-        var body = "Using \(Format.bytes(a.group.memoryBytes))"
-        if a.cpuAverage >= 5 { body += " and \(Int(a.cpuAverage))% CPU" }
-        body += ". Last used \(idle) ago. Looks like deadweight (\(Int(a.score * 100))%)."
-        if SuggestionPolicy(prefs: prefs).memoryIsTight(s) { body += " Memory is \(Int(s.memoryUsedFraction * 100))% full." }
+        // Just the reason, so the body stays within two lines.
+        let body = QuitReason.text(for: a, growth: grown[a.group.habitKey], now: now)
         notifier.suggest(key: a.group.habitKey, name: a.group.name, body: body)
         habitStore.log(.suggested, key: a.group.habitKey, name: a.group.name, detail: "score \(Int(a.score * 100))%, \(Format.bytes(a.group.memoryBytes))", at: now)
         refreshEvents()

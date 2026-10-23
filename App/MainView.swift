@@ -191,7 +191,7 @@ struct AppRow: View {
             AppIcon(path: g.bundlePath)
             VStack(alignment: .leading, spacing: 2) {
                 Text(g.name).lineLimit(1)
-                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(subtitle)
             }
             Spacer(minLength: 12)
             Text(Format.bytes(g.memoryBytes)).monospacedDigit().frame(width: 80, alignment: .trailing)
@@ -204,6 +204,9 @@ struct AppRow: View {
 
     private var subtitle: String {
         let f = assessment.features
+        if assessment.isSuggestable && assessment.group.kind == .app {
+            return QuitReason.text(for: assessment, growth: model.grown[assessment.group.habitKey])
+        }
         if assessment.group.kind == .commandLine || assessment.group.kind == .background {
             return "\(assessment.group.pids.count) process\(assessment.group.pids.count == 1 ? "" : "es")"
         }

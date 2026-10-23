@@ -16,6 +16,10 @@ public struct Assessment: Identifiable, Equatable, Sendable {
     public var cpuAverage: Double
     /// False when the app hasn't been in front since RamClean started watching.
     public var everActive: Bool = true
+    /// Days in the last 7 you had it in front for at least a minute.
+    public var daysUsed7d: Int = 0
+    /// Your recent answers about it, oldest first.
+    public var recentAnswers: [HabitAnswer] = []
     public var id: String { group.id }
 
     public var isSuggestable: Bool { verdict == .deadweight }
@@ -52,7 +56,7 @@ public struct Assessor {
             let (value, usedModel) = reason == nil ? score(f) : (HeuristicScorer.score(f), false)
             let verdict: Verdict = reason.map { .protected($0) } ?? (value >= prefs.deadweightThreshold ? .deadweight : .keep)
             return Assessment(group: g, features: f, score: value, usedModel: usedModel, verdict: verdict, cpuAverage: cpu,
-                              everActive: s.everActive)
+                              everActive: s.everActive, daysUsed7d: s.daysUsed7d, recentAnswers: s.recentAnswers)
         }
     }
 }

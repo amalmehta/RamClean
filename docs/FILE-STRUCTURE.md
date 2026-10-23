@@ -38,6 +38,7 @@ RamClean/
 │   │   ├── Protection.swift      Never-suggest rules
 │   │   ├── DeadweightModel.swift Create ML classifier, training answers, blending
 │   │   ├── Assessor.swift        Verdicts, notification policy, CPU averages
+│   │   ├── QuitReason.swift      The short reason on each quit suggestion
 │   │   ├── DiskScanner.swift     What to clear or move: caches, stale project builds, unused apps, old downloads, large files, Trash
 │   │   ├── KillLedger.swift      Follows apps RamClean quit for 30 minutes to learn whether you wanted them back
 │   │   ├── Forecast.swift        Disk-full forecast and apps whose memory has swollen

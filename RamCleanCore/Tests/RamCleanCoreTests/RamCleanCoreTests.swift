@@ -475,6 +475,61 @@ final class RecommendationTests: XCTestCase {
         var r = a; r.verdict = .protected(.recentlyUsed(minutes: 16))
         XCTAssertEqual(r.reasons, ["Used 16 min ago", "Rarely used (1 of 14 days)", "12% CPU", "You quit it 2× before"])
     }
+
+    func reasonAssessment(idle: Double, mb: UInt64, daysUsed7d: Int = 0, answers: [HabitAnswer] = [], everActive: Bool = true,
+                          cpu: Double = 0) -> Assessment {
+        let g = AppGroup(id: "s", kind: .app, name: "Spotify", bundleID: "s", bundlePath: nil, mainPID: 1, pids: [1],
+                         memoryBytes: mb << 20, cpuPercent: 0, hostedCommands: [], hostedCPUPercent: 0)
+        let f = FeatureVector(bundleID: "s", memoryMB: Double(mb), cpuPercent: cpu, minutesSinceActive: idle, foregroundMinutesToday: 0,
+                              avgDailyMinutes14d: 0, daysUsed14d: Double(daysUsed7d), launches7d: 0, hourOfDay: 12, isWeekend: 0,
+                              playingAudio: 0, timesKept: 0, timesQuit: 0)
+        return Assessment(group: g, features: f, score: 0.9, usedModel: false, verdict: .deadweight, cpuAverage: cpu,
+                          everActive: everActive, daysUsed7d: daysUsed7d, recentAnswers: answers)
+    }
+
+    func testQuitReasonLongIdle() {
+        let a = reasonAssessment(idle: 3 * 1440, mb: 2150, answers: [.kept, .quit, .quit, .quit, .quit])
+        XCTAssertEqual(QuitReason.text(for: a), "Idle 3 days, \(HumanFormat.bytes(2150 << 20)), you quit it the last 4 times, barely used this week.")
+        // Idle over a week: the week's use goes without saying.
+        let b = reasonAssessment(idle: 9 * 1440, mb: 800, answers: [.quit])
+        XCTAssertEqual(QuitReason.text(for: b), "Idle 9 days, \(HumanFormat.bytes(800 << 20)), you quit it last time.")
+    }
+
+    func testQuitReasonUsedOften() {
+        let a = reasonAssessment(idle: 150, mb: 1400, daysUsed7d: 6, answers: [.quit, .kept])
+        XCTAssertEqual(QuitReason.text(for: a), "Idle 2.5 h, \(HumanFormat.bytes(1400 << 20)), you kept it last time, used 6 of the last 7 days.")
+        let daily = reasonAssessment(idle: 45, mb: 600, daysUsed7d: 7)
+        XCTAssertEqual(QuitReason.text(for: daily), "Idle 45 min, \(HumanFormat.bytes(600 << 20)), used every day this week.")
+    }
+
+    func testQuitReasonNoHistory() {
+        let a = reasonAssessment(idle: 200, mb: 900, everActive: false)
+        XCTAssertEqual(QuitReason.text(for: a), "Not used since RamClean started, \(HumanFormat.bytes(900 << 20)), no history yet.")
+    }
+
+    func testQuitReasonGrowthAndLength() {
+        let now = Date()
+        let a = reasonAssessment(idle: 300, mb: 3000, daysUsed7d: 3, answers: [.quit, .quit, .quit], cpu: 22)
+        let growth = MemoryGrowth.Growth(from: 1000 << 20, to: 3000 << 20, since: now.addingTimeInterval(-3 * 3600))
+        let text = QuitReason.text(for: a, growth: growth, now: now)
+        XCTAssertTrue(text.hasPrefix("Idle 5 h, \(HumanFormat.bytes(3000 << 20)) (up \(HumanFormat.bytes(2000 << 20)) in 3 h), 22% CPU"), text)
+        XCTAssertLessThanOrEqual(text.count, QuitReason.maxLength, "fits two notification lines")
+        XCTAssertFalse(text.contains("of the last 7 days"), "the week's use is dropped first when it's too long")
+    }
+
+    func testAnswersAreRemembered() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = HabitStore(directory: dir)
+        let now = Date()
+        store.recordDecision(.kept, key: "k", name: "K", at: now)
+        store.recordDecision(.quitBySuggestion, key: "k", name: "K", at: now)
+        store.recordDecision(.quitBySuggestion, key: "k", name: "K", at: now)
+        store.recordDecision(.regretRelaunch, key: "k", name: "K", at: now) // the last quit becomes a keep
+        XCTAssertEqual(store.stats(for: "k", now: now).recentAnswers, [.kept, .quit, .kept])
+        store.save(now: now)
+        XCTAssertEqual(HabitStore(directory: dir).stats(for: "k", now: now).recentAnswers, [.kept, .quit, .kept])
+    }
 }
 
 final class AlertTests: XCTestCase {

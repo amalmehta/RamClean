@@ -12,6 +12,8 @@ public struct AppHabit: Codable, Equatable, Sendable {
     public var timesQuitBySuggestion = 0
     /// Times you reopened an app soon after RamClean quit it.
     public var regrets = 0
+    /// Your last few answers, oldest first. Nil in habits saved before answers were kept.
+    public var answers: [HabitAnswer]?
 
     public init(key: String, name: String, firstSeen: Date) {
         self.key = key; self.name = name; self.firstSeen = firstSeen
@@ -29,6 +31,8 @@ public struct HabitStats: Equatable, Sendable {
     public var regrets: Int
     /// False until the app has been seen in front at least once since RamClean started watching.
     public var everActive: Bool = true
+    public var daysUsed7d: Int = 0
+    public var recentAnswers: [HabitAnswer] = []
 }
 
 public enum HabitEventKind: String, Codable, Sendable {
@@ -57,6 +61,7 @@ public final class HabitStore {
     private var dirty = false
     private static let keepDays = 60
     private static let maxRecent = 500
+    private static let keepAnswers = 10
 
     private var habitsURL: URL { directory.appendingPathComponent("habits.json") }
     private var eventsURL: URL { directory.appendingPathComponent("events.jsonl") }
@@ -111,12 +116,21 @@ public final class HabitStore {
 
     public func recordDecision(_ kind: HabitEventKind, key: String, name: String, detail: String? = nil, at now: Date) {
         touch(key, name, now)
+        var answers = habits[key]!.answers ?? []
         switch kind {
-        case .kept, .alwaysKept: habits[key]!.timesKept += 1
-        case .quitBySuggestion: habits[key]!.timesQuitBySuggestion += 1
-        case .regretRelaunch: habits[key]!.regrets += 1
+        case .kept, .alwaysKept:
+            habits[key]!.timesKept += 1
+            answers.append(.kept)
+        case .quitBySuggestion:
+            habits[key]!.timesQuitBySuggestion += 1
+            answers.append(.quit)
+        case .regretRelaunch:
+            habits[key]!.regrets += 1
+            // Reopening it soon after turns that quit into a keep, as it does for the model.
+            if answers.last == .quit { answers[answers.count - 1] = .kept } else { answers.append(.kept) }
         default: break
         }
+        habits[key]!.answers = Array(answers.suffix(Self.keepAnswers))
         log(kind, key: key, name: name, detail: detail, at: now)
     }
 
@@ -155,7 +169,9 @@ public final class HabitStore {
             daysUsed14d: fg.filter { $0 >= 60 }.count,
             launches7d: launches,
             timesKept: h.timesKept, timesQuit: h.timesQuitBySuggestion, regrets: h.regrets,
-            everActive: h.lastActive != nil)
+            everActive: h.lastActive != nil,
+            daysUsed7d: fg.prefix(7).filter { $0 >= 60 }.count,
+            recentAnswers: h.answers ?? [])
     }
 
     /// Writes habits.json if anything changed and drops days older than 60.

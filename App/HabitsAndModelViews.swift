@@ -92,6 +92,7 @@ struct ActivityView: View {
         case .cleanedUp: return "Cleaned up:"
         case .thresholdAlert: return "Alert:"
         case .forgotten: return "Reset what it learned about"
+        case .putBack: return "Put back from the Trash:"
         }
     }
     private func symbol(_ k: HabitEventKind) -> String {
@@ -112,6 +113,7 @@ struct ActivityView: View {
         case .cleanedUp: return "sparkles"
         case .thresholdAlert: return "exclamationmark.triangle"
         case .forgotten: return "arrow.counterclockwise"
+        case .putBack: return "arrow.uturn.backward.circle"
         }
     }
     private func color(_ k: HabitEventKind) -> Color {

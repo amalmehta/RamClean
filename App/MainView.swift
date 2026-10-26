@@ -143,9 +143,12 @@ struct OverviewView: View {
                          tint: memoryTint(s), hint: "What to quit"))
                 bar(.cpu, UsageBar(title: "CPU", value: s.cpuPercent / 100, detail: "All cores", tint: .blue, hint: "What's busy"))
                 bar(.disk, UsageBar(title: "Disk used", value: 1 - s.diskFreeFraction,
-                         detail: "\(Format.bytes(UInt64(max(0, s.diskFree)))) free of \(Format.bytes(UInt64(max(0, s.diskTotal))))"
-                            + (model.diskFullInDays.map { $0 <= 30 ? " · full in ~\(max(1, Int($0.rounded()))) day\(Int($0.rounded()) <= 1 ? "" : "s") at this rate" : "" } ?? ""),
-                         tint: (1 - s.diskFreeFraction) * 100 >= model.prefs.diskAlertUsedPercent - 5 ? .red : .purple, hint: diskHint))
+                         detail: "\(Format.bytes(UInt64(max(0, s.diskFree)))) free of \(Format.bytes(UInt64(max(0, s.diskTotal))))",
+                         tint: (1 - s.diskFreeFraction) * 100 >= model.prefs.diskAlertUsedPercent - 5 ? .red : .purple, hint: diskHint,
+                         note: model.diskFullInDays.flatMap { days in
+                             let d = max(1, Int(days.rounded()))
+                             return days <= 30 ? "Full in ~\(d) day\(d == 1 ? "" : "s") at this rate" : nil
+                         }))
             }
         } else {
             ProgressView().frame(maxWidth: .infinity)
@@ -154,7 +157,7 @@ struct OverviewView: View {
 
     /// Says up front how much the last scan found to win back, so the card is worth clicking.
     private var diskHint: String {
-        let wins = model.diskReport?.totals.reduce(Int64(0)) { $0 + $1.bytes } ?? 0
+        let wins = model.diskOverview?.winBytes ?? 0
         return wins >= 1_073_741_824 ? "Clear up to \(Format.bytes(UInt64(wins)))" : "What to clear"
     }
 

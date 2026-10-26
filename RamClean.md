@@ -102,6 +102,7 @@ CHANGELOG:
 - 2026-10-02 — added a DELIVERABLES field after CONTEXT
 - 2026-10-02 — added meta-instruction: every project has a system design doc at docs/SYSTEM-DESIGN.md
 - 2026-10-05 — added meta-instruction: applications include a settings button or tab
+- 2026-10-25 — 10 speed and UI improvements: simulator list remembered, one read per project, build folders found alongside other steps (refresh 0.8 s, was 1.2 s; 0.5 s after relaunch, was 1.5 s), list worked out once per change, Trash moves off the main thread; full-disk forecast on its own line, Undo after Move to Trash, click a row to tick it, filter by category, Trash row updates right away
 - 2026-10-25 — refreshes reuse the last home walk and re-check what it found (1.2 s, was 7.5 s); new files show up within 6 hours or on Rescan
 - 2026-10-25 — disk scan works without Spotlight: with indexing off it used to find no large files or projects; now one parallel walk finds them (7 s, was ~2.5 min); sizes on the same worker pool (1.6 s, was 2.1–2.8 s); the Disk card says how much you could clear; tick items, Select all per section or Select All Safe, and move them to the Trash with one confirmation
 - 2026-10-09 — Disk popover opens fast and leads with "Where to win space" (totals per category and the 3 biggest single wins); lazy rows, cached per-type icons (row icons cost 1.7 s before), at most 4 redraws a second while scanning

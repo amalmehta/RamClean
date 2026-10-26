@@ -9,17 +9,17 @@ final class ScanBenchmark: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["RAMCLEAN_BENCH"] == "1")
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("ramclean-bench-sizes.json")
         try? FileManager.default.removeItem(at: file)
-        let walkFile = FileManager.default.temporaryDirectory.appendingPathComponent("ramclean-bench-walk.json")
+        let walkFile = FileManager.default.temporaryDirectory.appendingPathComponent("ramclean-bench-memory.json")
         try? FileManager.default.removeItem(at: walkFile)
-        var cache = SizeCache(), walk = HomeWalkCache()
+        var cache = SizeCache(), walk = ScanMemory()
         for label in ["first scan", "refresh", "after relaunch"] {
             if label == "after relaunch" {
                 cache.save(to: file); cache = SizeCache(contentsOf: file)
-                walk.save(to: walkFile); walk = HomeWalkCache(contentsOf: walkFile)
+                walk.save(to: walkFile); walk = ScanMemory(contentsOf: walkFile)
             }
             var scanner = DiskScanner()
             scanner.sizeCache = cache
-            scanner.homeWalkCache = walk
+            scanner.scanMemory = walk
             let t0 = Date()
             var firstCache: Double?, lastCache = 0.0
             let report = scanner.scan(progress: { _, found in

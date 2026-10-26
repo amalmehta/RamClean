@@ -27,8 +27,16 @@ final class AppModel: ObservableObject {
     var notificationsPaused: Bool { pausedUntil.map { $0 > Date() } ?? false }
     private static let pausedKey = "RamCleanNotificationsPausedUntil"
     @Published private(set) var isTraining = false
-    @Published private(set) var diskReport: DiskReport?
+    @Published private(set) var diskReport: DiskReport? {
+        didSet { diskOverview = diskReport?.overview }
+    }
+    /// Totals, per-section lists and lookups for `diskReport`, worked out once per change.
+    @Published private(set) var diskOverview: DiskReport.Overview?
     @Published private(set) var diskScanStep: String?
+    /// Items being moved to the Trash right now.
+    @Published private(set) var trashingPaths: Set<String> = []
+    /// The last batch moved to the Trash and where each one ended up, so it can be put back.
+    @Published private(set) var lastTrashed: (items: [(item: DiskItem, inTrash: URL)], bytes: Int64)?
     /// Paths being moved off the Mac right now.
     @Published private(set) var movingPaths: Set<String> = []
     /// Items whose cleanup command (brew cleanup, simctl delete unavailable) is running.
@@ -67,8 +75,8 @@ final class AppModel: ObservableObject {
     /// Folder sizes remembered between disk scans (and app launches, via sizes.json), so
     /// refreshes only re-measure what changed.
     let sizeCache: SizeCache
-    /// The last walk of the home folder (via home-walk.json), used when Spotlight isn't indexing it.
-    let homeWalkCache: HomeWalkCache
+    /// The last home-folder walk (used when Spotlight isn't indexing it) and simulator list, via scan-memory.json.
+    let scanMemory: ScanMemory
 
     private let processSampler = ProcessSampler()
     private let systemSampler = SystemSampler()
@@ -111,7 +119,8 @@ final class AppModel: ObservableObject {
                               instanceName: SCDynamicStoreCopyComputerName(nil, nil) as String? ?? "Mac")
         prefs = Self.loadPrefs()
         sizeCache = SizeCache(contentsOf: dataDirectory.appendingPathComponent("sizes.json"))
-        homeWalkCache = HomeWalkCache(contentsOf: dataDirectory.appendingPathComponent("home-walk.json"))
+        scanMemory = ScanMemory(contentsOf: dataDirectory.appendingPathComponent("scan-memory.json"))
+        try? FileManager.default.removeItem(at: dataDirectory.appendingPathComponent("home-walk.json")) // replaced by scan-memory.json
         diskHistory = DiskHistory(contentsOf: dataDirectory.appendingPathComponent("disk-history.json"))
         // Last disk scan, so "What to clear" opens instantly; it refreshes in the background.
         if let data = try? Data(contentsOf: dataDirectory.appendingPathComponent("disk-report.json")),
@@ -409,7 +418,7 @@ final class AppModel: ObservableObject {
         case .trash:
             let item = diskReport?.items.first { $0.path == target }
                 ?? DiskItem(name: (target as NSString).lastPathComponent, path: target, bytes: nil, kind: .cache, reason: "")
-            if let error = moveToTrash(item) { notifier.problem("Couldn't move \(item.name) to the Trash", error) }
+            moveToTrash(item) { error in if let error { self.notifier.problem("Couldn't move \(item.name) to the Trash", error) } }
         }
     }
 
@@ -666,13 +675,13 @@ final class AppModel: ObservableObject {
     func scanDisk(byUser: Bool = true, fresh: Bool = false) {
         guard diskScanStep == nil else { return }
         sizeCache.reuse = !fresh
-        homeWalkCache.reuse = !fresh
+        scanMemory.reuse = !fresh
         diskScanStep = "starting"
         let askedKey = "RamCleanScannedProtectedFolders"
         var scanner = DiskScanner()
         scanner.avoidProtectedFolders = !byUser && !UserDefaults.standard.bool(forKey: askedKey)
         scanner.sizeCache = sizeCache
-        scanner.homeWalkCache = homeWalkCache
+        scanner.scanMemory = scanMemory
         scanner.staleDays = prefs.staleDays
         scanner.activeDays = prefs.activeDays
         let keep = prefs
@@ -702,6 +711,7 @@ final class AppModel: ObservableObject {
                 self.diskReport = report
                 self.saveDiskReport()
                 self.diskScanStep = nil
+                self.lastTrashed = nil
                 if self.diskAlertWaitingForScan, let s = self.system {
                     self.diskAlertWaitingForScan = false
                     self.sendAlert(AlertRecommender.disk(s, report))
@@ -711,36 +721,75 @@ final class AppModel: ObservableObject {
     }
 
     /// Moves an item to the Trash (recoverable until you empty it). Returns an error message on failure.
-    func moveToTrash(_ item: DiskItem) -> String? {
-        guard item.canTrash else { return "RamClean doesn't remove this one itself." }
-        return moveToTrash([item])
+    func moveToTrash(_ item: DiskItem, done: @escaping (String?) -> Void) {
+        guard item.canTrash else { done("RamClean doesn't remove this one itself."); return }
+        moveToTrash([item], done: done)
     }
 
-    /// Moves several items to the Trash in one go; ones that fail are named in the returned message.
-    func moveToTrash(_ items: [DiskItem]) -> String? {
-        let items = items.filter(\.canTrash)
-        guard !items.isEmpty, allowed("Moving files to the Trash") else { return nil }
-        var failures: [String] = []
-        var trashed: Set<String> = []
-        for item in items {
-            do {
-                try FileManager.default.trashItem(at: URL(fileURLWithPath: item.path), resultingItemURL: nil)
-            } catch {
-                failures.append("\(item.name): \(error.localizedDescription)")
-                continue
+    /// Moves several items to the Trash off the main thread, so a big batch doesn't freeze the
+    /// window, then logs them and remembers them for Undo. Calls back on the main thread with a
+    /// message naming any that failed, or nil.
+    func moveToTrash(_ items: [DiskItem], done: @escaping (String?) -> Void) {
+        let items = items.filter { $0.canTrash && !trashingPaths.contains($0.path) }
+        guard !items.isEmpty, allowed("Moving files to the Trash") else { done(nil); return }
+        trashingPaths.formUnion(items.map(\.path))
+        DispatchQueue.global(qos: .userInitiated).async {
+            var moved: [(item: DiskItem, inTrash: URL)] = [], failures: [String] = []
+            for item in items {
+                var inTrash: NSURL?
+                do {
+                    try FileManager.default.trashItem(at: URL(fileURLWithPath: item.path), resultingItemURL: &inTrash)
+                    moved.append((item, (inTrash as URL?) ?? URL(fileURLWithPath: item.path)))
+                } catch {
+                    failures.append("\(item.name): \(error.localizedDescription)")
+                }
             }
-            trashed.insert(item.id)
-            habitStore.log(.movedToTrash, key: "disk", name: item.name,
-                           detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) · \(item.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))",
-                           bytes: UInt64(max(0, item.bytes ?? 0)), at: Date())
+            DispatchQueue.main.async {
+                self.trashingPaths.subtract(items.map(\.path))
+                if !moved.isEmpty {
+                    let bytes = moved.reduce(Int64(0)) { $0 + max(0, $1.item.bytes ?? 0) }
+                    for m in moved {
+                        self.habitStore.log(.movedToTrash, key: "disk", name: m.item.name,
+                                            detail: "\(Format.bytes(UInt64(max(0, m.item.bytes ?? 0)))) · \(m.item.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))",
+                                            bytes: UInt64(max(0, m.item.bytes ?? 0)), at: Date())
+                    }
+                    let ids = Set(moved.map(\.item.id))
+                    self.diskReport?.items.removeAll { ids.contains($0.id) }
+                    self.diskReport?.trashChanged(by: bytes, trashPath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash").path)
+                    self.lastTrashed = (moved, bytes)
+                    self.saveDiskReport()
+                    self.refreshEvents()
+                    self.tick()
+                }
+                done(failures.isEmpty ? nil : failures.joined(separator: "\n"))
+            }
         }
-        if !trashed.isEmpty {
-            diskReport?.items.removeAll { trashed.contains($0.id) }
+    }
+
+    /// Puts the last batch back where it was. Items whose old place is taken now stay in the Trash.
+    func undoTrash(done: @escaping (String?) -> Void) {
+        guard let last = lastTrashed else { done(nil); return }
+        lastTrashed = nil
+        var back: [DiskItem] = [], failures: [String] = []
+        for m in last.items {
+            do {
+                try FileManager.default.moveItem(at: m.inTrash, to: URL(fileURLWithPath: m.item.path))
+                back.append(m.item)
+                habitStore.log(.putBack, key: "disk", name: m.item.name, detail: "Put back from the Trash",
+                               bytes: UInt64(max(0, m.item.bytes ?? 0)), at: Date())
+            } catch {
+                failures.append("\(m.item.name): \(error.localizedDescription)")
+            }
+        }
+        if !back.isEmpty {
+            diskReport?.items += back
+            diskReport?.trashChanged(by: -back.reduce(Int64(0)) { $0 + max(0, $1.bytes ?? 0) },
+                                     trashPath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash").path)
             saveDiskReport()
             refreshEvents()
             tick()
         }
-        return failures.isEmpty ? nil : failures.joined(separator: "\n")
+        done(failures.isEmpty ? nil : failures.joined(separator: "\n"))
     }
 
     /// Runs an item's own cleanup command (e.g. `xcrun simctl delete unavailable`) in the background
@@ -784,7 +833,7 @@ final class AppModel: ObservableObject {
         guard let r = diskReport, let data = try? HabitStore.encoder.encode(r) else { return }
         try? data.write(to: dataDirectory.appendingPathComponent("disk-report.json"), options: .atomic)
         sizeCache.save(to: dataDirectory.appendingPathComponent("sizes.json"))
-        homeWalkCache.save(to: dataDirectory.appendingPathComponent("home-walk.json"))
+        scanMemory.save(to: dataDirectory.appendingPathComponent("scan-memory.json"))
     }
 
     /// Drives you can move big files to (external and network volumes, not this Mac's own disk).

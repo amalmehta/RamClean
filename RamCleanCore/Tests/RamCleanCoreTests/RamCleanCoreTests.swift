@@ -545,7 +545,7 @@ final class RecommendationTests: XCTestCase {
         try write("Documents/doc.mov", mb: 4)
         let real = DiskScanner.realPath(home.path)
         var sc = scanner()
-        sc.homeWalkCache = HomeWalkCache()
+        sc.scanMemory = ScanMemory()
         XCTAssertEqual(sc.homeIndex(isCancelled: { false }).big.count, 3)
 
         // Changes after the walk: one file removed, one grown, one new file and one new project.
@@ -564,7 +564,7 @@ final class RecommendationTests: XCTestCase {
         // …but a walk that skipped them doesn't serve one that reads them.
         var quiet = scanner()
         quiet.avoidProtectedFolders = true
-        quiet.homeWalkCache = HomeWalkCache()
+        quiet.scanMemory = ScanMemory()
         _ = quiet.homeIndex(isCancelled: { false })
         quiet.avoidProtectedFolders = false
         XCTAssertTrue(quiet.homeIndex(isCancelled: { false }).big.contains { $0.path.hasSuffix("doc.mov") })
@@ -572,19 +572,74 @@ final class RecommendationTests: XCTestCase {
         // Saved and reloaded (an app relaunch): still reused.
         sc.avoidProtectedFolders = false
         let file = home.appendingPathComponent("walk.json")
-        sc.homeWalkCache!.save(to: file)
-        sc.homeWalkCache = HomeWalkCache(contentsOf: file)
+        sc.scanMemory!.save(to: file)
+        sc.scanMemory = ScanMemory(contentsOf: file)
         XCTAssertFalse(sc.homeIndex(isCancelled: { false }).big.contains { $0.path.hasSuffix("new.mov") })
 
         // Too old, or Rescan: walked again, so the new file and project show up.
-        sc.homeWalkCache!.reuse = false
+        sc.scanMemory!.reuse = false
         let fresh = sc.homeIndex(isCancelled: { false })
         XCTAssertTrue(fresh.big.contains { $0.path.hasSuffix("new.mov") })
         XCTAssertEqual(Set(fresh.markers), [real + "/Code/app/package.json", real + "/Code/new/Cargo.toml"])
-        sc.homeWalkCache!.reuse = true
+        sc.scanMemory!.reuse = true
         try write("Movies/newer.mov", mb: 4)
         sc.now = Date().addingTimeInterval(7 * 3600)
         XCTAssertTrue(sc.homeIndex(isCancelled: { false }).big.contains { $0.path.hasSuffix("newer.mov") }, "older than maxAge")
+    }
+
+    func testOverviewAndTrashRowFollowMovesToTheTrash() {
+        let mb: Int64 = 1 << 20
+        var report = DiskReport(items: [
+            DiskItem(name: "npm cache", path: "/a", bytes: 5 * mb, kind: .cache, reason: ""),
+            DiskItem(name: "site › node_modules", path: "/b", bytes: 3 * mb, kind: .buildArtifact, reason: ""),
+            DiskItem(name: "Xcode archives", path: "/c", bytes: 9 * mb, kind: .cache, reason: "", caution: "Check"),
+        ], scannedAt: Date())
+        let o = report.overview
+        XCTAssertEqual(o.winBytes, 17 * mb)
+        XCTAssertEqual(o.byKind[.cache]?.map(\.path), ["/a", "/c"])
+        XCTAssertEqual(o.byPath["/b"]?.name, "site › node_modules")
+        XCTAssertEqual(o.safeBytes, 8 * mb)
+        XCTAssertEqual(o.biggestWins.first?.path, "/c")
+
+        // No Trash row yet: moving 5 MB there adds one.
+        report.items.removeAll { $0.path == "/a" }
+        report.trashChanged(by: 5 * mb, trashPath: "/t")
+        XCTAssertEqual(report.items(.trash).first?.bytes, 5 * mb)
+        report.trashChanged(by: 3 * mb, trashPath: "/t")
+        XCTAssertEqual(report.items(.trash).first?.bytes, 8 * mb)
+        XCTAssertEqual(report.items.map { $0.bytes ?? 0 }, report.items.map { $0.bytes ?? 0 }.sorted(by: >), "still biggest first")
+        // Undo takes it back out; an emptied Trash row goes away.
+        report.trashChanged(by: -8 * mb, trashPath: "/t")
+        XCTAssertTrue(report.items(.trash).isEmpty)
+        // A Trash macOS wouldn't let RamClean measure stays unmeasured.
+        report.items.append(DiskItem(name: "Trash", path: "/t", bytes: nil, kind: .trash, reason: "", canTrash: false))
+        report.trashChanged(by: 2 * mb, trashPath: "/t")
+        XCTAssertNil(report.items(.trash).first?.bytes)
+    }
+
+    func testSimulatorListIsRememberedUntilADeviceChanges() throws {
+        try write("Library/Developer/CoreSimulator/Devices/OLD/data/disk", mb: 3)
+        var asked = 0
+        var sc = scanner()
+        sc.minArtifactBytes = 1 * 1_048_576
+        sc.scanMemory = ScanMemory()
+        sc.unavailableSimulators = { asked += 1; return [self.home.appendingPathComponent("Library/Developer/CoreSimulator/Devices/OLD")] }
+        XCTAssertNotNil(sc.unavailableSimulatorItem(isCancelled: { false }))
+        XCTAssertNotNil(sc.unavailableSimulatorItem(isCancelled: { false }))
+        XCTAssertEqual(asked, 1, "simctl asked once")
+        // A device added (the Devices folder changes): asked again.
+        try write("Library/Developer/CoreSimulator/Devices/NEW/data/disk", mb: 1)
+        _ = sc.unavailableSimulatorItem(isCancelled: { false })
+        XCTAssertEqual(asked, 2)
+        // Rescan asks again too; a device deleted since is left out without asking.
+        sc.scanMemory!.reuse = false
+        _ = sc.unavailableSimulatorItem(isCancelled: { false })
+        XCTAssertEqual(asked, 3)
+        sc.scanMemory!.reuse = true
+        try FileManager.default.removeItem(at: home.appendingPathComponent("Library/Developer/CoreSimulator/Devices/OLD/data"))
+        try FileManager.default.removeItem(at: home.appendingPathComponent("Library/Developer/CoreSimulator/Devices/OLD"))
+        // Removing OLD changes the Devices folder, so this asks; the answer still names OLD, which is filtered out.
+        XCTAssertNil(sc.unavailableSimulatorItem(isCancelled: { false }))
     }
 
     func testSafeToClearIsOnlyRebuildableItemsWithNothingToCheck() {

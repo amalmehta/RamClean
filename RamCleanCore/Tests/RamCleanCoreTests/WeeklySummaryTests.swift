@@ -171,4 +171,19 @@ final class WeeklySummaryTests: XCTestCase {
         XCTAssertNil(e.bytes)
         XCTAssertEqual(e.kind, .quitBySuggestion)
     }
+
+    func testPutBackTakesItsSpaceOffTheWeek() {
+        let week = WeeklySummary.week(containing: date("2026-10-15T12:00:00Z"), calendar: utc)
+        func e(_ kind: HabitEventKind, _ bytes: UInt64, _ at: String) -> HabitEvent {
+            HabitEvent(date: date(at), kind: kind, key: "disk", name: "x", detail: nil, bytes: bytes)
+        }
+        let s = WeeklySummary.make(events: [e(.movedToTrash, 3 * gib, "2026-10-13T10:00:00Z"), e(.movedToTrash, gib, "2026-10-13T10:00:00Z"),
+                                            e(.putBack, gib, "2026-10-13T10:01:00Z")], interval: week)
+        XCTAssertEqual(s.diskItems, 1)
+        XCTAssertEqual(s.diskReclaimed, 3 * gib)
+        // A put-back of something moved before the week can't go below zero.
+        let lone = WeeklySummary.make(events: [e(.putBack, gib, "2026-10-13T10:00:00Z")], interval: week)
+        XCTAssertEqual(lone.diskItems, 0)
+        XCTAssertEqual(lone.diskReclaimed, 0)
+    }
 }

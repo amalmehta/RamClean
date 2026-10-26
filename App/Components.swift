@@ -9,6 +9,8 @@ struct UsageBar: View {
     var tint: Color
     /// Shown under the bar when it opens recommendations on click.
     var hint: String? = nil
+    /// A warning on its own line under the detail (e.g. "Full in ~3 days at this rate"), in the bar's tint.
+    var note: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -25,6 +27,9 @@ struct UsageBar: View {
             }
             .frame(height: 8)
             Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            if let note {
+                Text(note).font(.caption.weight(.medium)).foregroundStyle(tint).lineLimit(1)
+            }
             if let hint {
                 Label(hint, systemImage: "chevron.right.circle").font(.caption.weight(.medium)).foregroundStyle(tint)
                     .labelStyle(TrailingIconLabel())

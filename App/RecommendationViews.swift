@@ -112,6 +112,8 @@ struct DiskRecommendations: View {
     /// Paths ticked for moving to the Trash together.
     @State private var selected: Set<String> = []
     @State private var confirmSelected = false
+    /// Set by clicking a category in "Where to win space": only that section is listed.
+    @State private var onlyKind: DiskItem.Kind?
     @State private var pendingCleanup: DiskItem?
     @State private var pendingMove: (item: DiskItem, folder: URL, name: String)?
     @State private var error: String?
@@ -120,13 +122,14 @@ struct DiskRecommendations: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            if let report = model.diskReport {
+            if let report = model.diskReport, let overview = model.diskOverview {
+                if let last = model.lastTrashed { undoBanner(count: last.items.count, bytes: last.bytes) }
                 ScrollView {
                     // Lazy: only the rows on screen are built, not all ~200.
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        SpaceSummary(report: report) { row($0) }
-                        ForEach(DiskItem.Kind.allCases, id: \.self) { kind in
-                            let items = report.items(kind)
+                        SpaceSummary(overview: overview, only: $onlyKind) { row($0) }
+                        ForEach(DiskItem.Kind.allCases.filter { onlyKind == nil || $0 == onlyKind }, id: \.self) { kind in
+                            let items = overview.byKind[kind] ?? []
                             if !items.isEmpty {
                                 sectionHeader(kind, items: items)
                                 ForEach(items) { item in
@@ -149,7 +152,11 @@ struct DiskRecommendations: View {
         }
         .frame(width: 560, height: 560)
         // Drop ticks for anything that's gone (trashed, cleaned up, or missing from a new scan).
-        .onChange(of: model.diskReport?.items.map(\.path)) { _, paths in selected.formIntersection(paths ?? []) }
+        .onChange(of: model.diskReport?.items.map(\.path)) { _, paths in
+            selected.formIntersection(paths ?? [])
+            // A category that's now empty (all cleared) shows everything again.
+            if let only = onlyKind, model.diskOverview?.byKind[only]?.isEmpty ?? true { onlyKind = nil }
+        }
         // Show the last results right away; refresh them in the background if they're over 30 minutes old.
         .onAppear {
             if let r = model.diskReport, Date().timeIntervalSince(r.scannedAt) < 30 * 60 { return }
@@ -157,7 +164,7 @@ struct DiskRecommendations: View {
         }
         .confirmationDialog(pending.map { "Move “\($0.name)” to the Trash?" } ?? "", isPresented: Binding(
             get: { pending != nil }, set: { if !$0 { pending = nil } }), presenting: pending) { item in
-            Button("Move to Trash", role: .destructive) { error = model.moveToTrash(item) }
+            Button("Move to Trash", role: .destructive) { model.moveToTrash(item) { error = $0 } }
         } message: { item in
             Text("\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))). \(item.caution ?? item.reason). You can put it back from the Trash until you empty it.")
         }
@@ -181,7 +188,7 @@ struct DiskRecommendations: View {
         .confirmationDialog(selectedItems.count == 1 ? "Move “\(selectedItems[0].name)” to the Trash?" : "Move \(selectedItems.count) items to the Trash?",
                             isPresented: $confirmSelected) {
             Button("Move to Trash", role: .destructive) {
-                error = model.moveToTrash(selectedItems)
+                model.moveToTrash(selectedItems) { error = $0 }
                 selected.removeAll()
             }
         } message: {
@@ -194,7 +201,11 @@ struct DiskRecommendations: View {
         } message: { Text(error ?? "") }
     }
 
-    private var selectedItems: [DiskItem] { (model.diskReport?.items ?? []).filter { selected.contains($0.path) } }
+    /// Looked up by path, so ticking doesn't scan the whole list.
+    private var selectedItems: [DiskItem] {
+        guard let byPath = model.diskOverview?.byPath else { return [] }
+        return selected.compactMap { byPath[$0] }.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }
+    }
     private var selectedBytes: Int64 { selectedItems.reduce(0) { $0 + max(0, $1.bytes ?? 0) } }
 
     private func sectionHeader(_ kind: DiskItem.Kind, items: [DiskItem]) -> some View {
@@ -214,12 +225,29 @@ struct DiskRecommendations: View {
         .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 4)
     }
 
+    /// After a Move to Trash: what went, with Undo, until the next scan.
+    private func undoBanner(count: Int, bytes: Int64) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "trash").foregroundStyle(.secondary)
+            Text("Moved \(count == 1 ? "1 item" : "\(count) items") (\(Format.bytes(UInt64(bytes)))) to the Trash. Empty it in Finder to free the space.")
+                .font(.callout).fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button("Undo") { model.undoTrash { error = $0 } }.controlSize(.small)
+                .keyboardShortcut("z", modifiers: .command)
+                .help("Put \(count == 1 ? "it" : "them") back where \(count == 1 ? "it was" : "they were")")
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.08))
+    }
+
     /// Pinned under the list while anything is ticked.
     private var selectionBar: some View {
-        VStack(spacing: 0) {
+        let chosen = selectedItems
+        let bytes = chosen.reduce(Int64(0)) { $0 + max(0, $1.bytes ?? 0) }
+        return VStack(spacing: 0) {
             Divider()
             HStack(spacing: 10) {
-                Text("\(selectedItems.count) selected · \(Format.bytes(UInt64(selectedBytes)))")
+                Text("\(chosen.count) selected · \(Format.bytes(UInt64(bytes)))")
                     .font(.callout.weight(.medium)).monospacedDigit()
                 Spacer()
                 Button("Clear Selection") { selected.removeAll() }.controlSize(.small)
@@ -234,6 +262,7 @@ struct DiskRecommendations: View {
 
     private func row(_ item: DiskItem) -> DiskRow {
         DiskRow(item: item, moving: model.movingPaths.contains(item.path), cleaning: model.cleaningPaths.contains(item.path),
+                trashing: model.trashingPaths.contains(item.path),
                 selected: item.canTrash ? Binding(get: { selected.contains(item.path) },
                                                   set: { if $0 { selected.insert(item.path) } else { selected.remove(item.path) } }) : nil,
                 onTrash: { pending = item }, onCleanup: { pendingCleanup = item },
@@ -265,11 +294,15 @@ struct DiskRecommendations: View {
             VStack(alignment: .trailing, spacing: 6) {
                 Button("Rescan") { model.scanDisk(fresh: true) }.disabled(model.diskScanStep != nil)
                     .help("Look for new files and measure everything again from scratch")
-                if let safe = model.diskReport?.safeToClear, !safe.isEmpty {
-                    let bytes = safe.reduce(Int64(0)) { $0 + ($1.bytes ?? 0) }
-                    Button("Select All Safe (\(Format.bytes(UInt64(bytes))))") { selected.formUnion(safe.map(\.path)) }
-                        .controlSize(.small)
-                        .help("Ticks every cache and old build folder that comes back on its own and has nothing to check first")
+                if let o = model.diskOverview, !o.safeToClear.isEmpty {
+                    let safe = Set(o.safeToClear.map(\.path))
+                    if safe.isSubset(of: selected) {
+                        Button("Deselect Safe") { selected.subtract(safe) }.controlSize(.small)
+                    } else {
+                        Button("Select All Safe (\(Format.bytes(UInt64(o.safeBytes))))") { selected.formUnion(safe) }
+                            .controlSize(.small)
+                            .help("Ticks every cache and old build folder that comes back on its own and has nothing to check first")
+                    }
                 }
             }
         }
@@ -281,6 +314,7 @@ struct DiskRow: View {
     var item: DiskItem
     var moving: Bool
     var cleaning: Bool
+    var trashing = false
     /// Ticked to move to the Trash with others; nil when RamClean doesn't trash this kind.
     var selected: Binding<Bool>?
     var onTrash: () -> Void
@@ -328,8 +362,11 @@ struct DiskRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 6) {
-                if moving || cleaning {
-                    HStack(spacing: 4) { ProgressView().controlSize(.small); Text(moving ? "Moving…" : "Cleaning…").font(.caption) }
+                if moving || cleaning || trashing {
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.small)
+                        Text(moving ? "Moving…" : cleaning ? "Cleaning…" : "To Trash…").font(.caption)
+                    }
                 } else {
                     if canMove { moveMenu }
                     if let command = item.cleanupCommandText {
@@ -350,6 +387,10 @@ struct DiskRow: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
+        // Clicking anywhere on a trashable row ticks it; the buttons keep their own clicks.
+        .background(selected?.wrappedValue == true ? Color.accentColor.opacity(0.1) : .clear)
+        .contentShape(Rectangle())
+        .onTapGesture { selected?.wrappedValue.toggle() }
     }
 
     /// Asks where to move it: any connected external drive, or a folder you pick.
@@ -383,20 +424,26 @@ struct DiskRow: View {
 }
 
 /// The answer up front: how much space each kind of thing could free, and the biggest single wins.
+/// Clicking a category lists only that kind below; clicking it again (or Show All) lists everything.
 struct SpaceSummary<Row: View>: View {
-    var report: DiskReport
+    var overview: DiskReport.Overview
+    @Binding var only: DiskItem.Kind?
     @ViewBuilder var row: (DiskItem) -> Row
 
     var body: some View {
-        let totals = report.totals
-        let sum = max(1, totals.reduce(Int64(0)) { $0 + $1.bytes })
+        let totals = overview.totals
+        let sum = max(1, overview.winBytes)
         if !totals.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Where to win space: \(Format.bytes(UInt64(sum)))").font(.subheadline.weight(.semibold))
+                HStack {
+                    Text("Where to win space: \(Format.bytes(UInt64(sum)))").font(.subheadline.weight(.semibold))
+                    Spacer()
+                    if only != nil { Button("Show All") { only = nil }.buttonStyle(.link).font(.caption) }
+                }
                 GeometryReader { geo in
                     HStack(spacing: 2) {
                         ForEach(totals, id: \.kind) { t in
-                            Rectangle().fill(t.kind.color)
+                            Rectangle().fill(t.kind.color).opacity(only == nil || only == t.kind ? 1 : 0.3)
                                 .frame(width: max(4, (geo.size.width - CGFloat(totals.count) * 2) * CGFloat(t.bytes) / CGFloat(sum)))
                         }
                     }
@@ -406,17 +453,28 @@ struct SpaceSummary<Row: View>: View {
                 .accessibilityHidden(true)
                 LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], spacing: 4) {
                     ForEach(totals, id: \.kind) { t in
-                        HStack(spacing: 6) {
-                            Circle().fill(t.kind.color).frame(width: 8, height: 8)
-                            Text(t.kind.shortTitle).font(.caption)
-                            Text(Format.bytes(UInt64(t.bytes))).font(.caption.weight(.semibold)).monospacedDigit()
+                        Button { only = only == t.kind ? nil : t.kind } label: {
+                            HStack(spacing: 6) {
+                                Circle().fill(t.kind.color).frame(width: 8, height: 8)
+                                Text(t.kind.shortTitle).font(.caption)
+                                Text(Format.bytes(UInt64(t.bytes))).font(.caption.weight(.semibold)).monospacedDigit()
+                            }
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(only == t.kind ? t.kind.color.opacity(0.18) : .clear, in: Capsule())
+                            .contentShape(Capsule())
                         }
+                        .buttonStyle(.plain)
+                        .help(only == t.kind ? "Show everything" : "Show only \(t.kind.shortTitle.lowercased())")
+                        .accessibilityLabel("\(t.kind.shortTitle), \(Format.bytes(UInt64(t.bytes)))")
+                        .accessibilityAddTraits(only == t.kind ? .isSelected : [])
                     }
                 }
-                Text("Biggest single wins").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 4)
+                if only == nil {
+                    Text("Biggest single wins").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 4)
+                }
             }
             .padding(.horizontal, 14).padding(.top, 12)
-            ForEach(report.biggestWins()) { item in row(item) }
+            if only == nil { ForEach(overview.biggestWins) { item in row(item) } }
             Divider()
         }
     }

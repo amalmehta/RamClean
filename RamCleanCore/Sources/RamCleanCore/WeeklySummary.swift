@@ -69,6 +69,9 @@ public struct WeeklySummary: Equatable, Sendable {
             case .movedToTrash, .cleanedUp, .movedOffMac:
                 s.diskItems += 1
                 s.diskReclaimed += e.bytes ?? 0
+            case .putBack:
+                s.diskItems = max(0, s.diskItems - 1)
+                s.diskReclaimed -= min(s.diskReclaimed, e.bytes ?? 0)
             default: break
             }
         }

@@ -39,6 +39,8 @@ public enum HabitEventKind: String, Codable, Sendable {
     case activated, launched, terminated, suggested, quitBySuggestion, kept, alwaysKept, forceQuit, regretRelaunch, stayedClosed, neverQuit, restarted, diskWarning, movedToTrash, movedOffMac, cleanedUp, thresholdAlert
     /// You reset what RamClean learned about the app: its earlier answers no longer count.
     case forgotten
+    /// Undo after Move to Trash: the item went back where it was, so its space wasn't freed after all.
+    case putBack
 }
 
 public struct HabitEvent: Codable, Equatable, Sendable, Identifiable {

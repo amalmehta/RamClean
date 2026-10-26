@@ -99,6 +99,40 @@ public struct DiskReport: Equatable, Sendable, Codable {
         items.filter { $0.canTrash && $0.caution == nil && ($0.bytes ?? 0) > 0 && [.cache, .buildArtifact].contains($0.kind) }
     }
 
+    /// Everything the list shows, worked out once per report instead of on every redraw.
+    public struct Overview: Sendable {
+        public var totals: [(kind: DiskItem.Kind, bytes: Int64, count: Int)]
+        /// All the space you could win (the sum of `totals`).
+        public var winBytes: Int64
+        public var byKind: [DiskItem.Kind: [DiskItem]]
+        public var byPath: [String: DiskItem]
+        public var safeToClear: [DiskItem]
+        public var safeBytes: Int64
+        public var biggestWins: [DiskItem]
+    }
+
+    public var overview: Overview {
+        let totals = self.totals, safe = safeToClear
+        return Overview(totals: totals, winBytes: totals.reduce(0) { $0 + $1.bytes },
+                        byKind: Dictionary(grouping: items, by: \.kind),
+                        byPath: Dictionary(items.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a }),
+                        safeToClear: safe, safeBytes: safe.reduce(0) { $0 + ($1.bytes ?? 0) }, biggestWins: biggestWins())
+    }
+
+    /// After items went to the Trash (positive `bytes`) or came back out of it (negative): the Trash
+    /// row's size follows, so the list stays right without a rescan. Adds a Trash row if there wasn't one.
+    public mutating func trashChanged(by bytes: Int64, trashPath: String) {
+        if let i = items.firstIndex(where: { $0.kind == .trash }) {
+            guard let size = items[i].bytes else { return } // unmeasured: nothing to keep up to date
+            let next = size + bytes
+            if next <= 0 { items.remove(at: i) } else { items[i].bytes = next }
+        } else if bytes > 0 {
+            items.append(DiskItem(name: "Trash", path: trashPath, bytes: bytes, kind: .trash,
+                                  reason: "Files you've already deleted still take space until you empty the Trash in Finder.", canTrash: false))
+        }
+        items.sort { ($0.bytes ?? 0) > ($1.bytes ?? 0) }
+    }
+
     /// The few single items that free the most space.
     public func biggestWins(_ n: Int = 3) -> [DiskItem] {
         Array(items.filter(Self.isWin).sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }.prefix(n))
@@ -143,8 +177,9 @@ public struct DiskScanner {
     public var unavailableSimulators: () -> [URL] = DiskScanner.listUnavailableSimulators
     /// Sizes remembered from earlier scans, reused when a folder hasn't changed (nil: always measure).
     public var sizeCache: SizeCache?
-    /// The last walk of the home folder, reused for a while when Spotlight isn't indexing it (nil: always walk).
-    public var homeWalkCache: HomeWalkCache?
+    /// The last walk of the home folder (used when Spotlight isn't indexing it) and the last list of
+    /// unavailable simulators, reused for a while (nil: always walk and ask simctl).
+    public var scanMemory: ScanMemory?
     /// Stay out of Desktop, Documents and Downloads. Reading them can raise a macOS permission
     /// prompt that blocks the scan until someone answers, so background scans set this until
     /// you've run a scan yourself. Spotlight's large-file results there still count (no access needed).
@@ -245,19 +280,18 @@ public struct DiskScanner {
                     index = self.homeIndex(isCancelled: isCancelled)
                     nodeModules = self.staleNodeModules(index.nodeModules.map { URL(fileURLWithPath: $0) }, isCancelled: isCancelled)
                     add("node_modules", nodeModules, report: progress)
+                    // Projects only need the index (caches are all in ~/Library or hidden folders, which
+                    // never count as projects), so build folders are found while the other steps run.
+                    let projects = self.filterIndex(index, excluding: [], skipFiles: []).projects.filter { !self.isProtected($0) }
+                    add("build files in old projects", self.buildArtifacts(in: projects, listed: Set(nodeModules.map { Self.realPath($0.path) }),
+                                                                           isCancelled: isCancelled), report: progress)
                 }
                 group.wait()
             }
         }
 
-        // These need the results above: large files skip anything already listed, and
-        // build folders come from the project list.
-        let skipFiles = Set(downloads.map(\.path))
-        let found = filterIndex(index, excluding: claimed, skipFiles: skipFiles)
-        add("large files", found.largeFiles, report: progress)
-        add("build files in old projects", buildArtifacts(in: found.projects.filter { !isProtected($0) },
-                                                          listed: Set(nodeModules.map { Self.realPath($0.path) }), isCancelled: isCancelled),
-            report: progress)
+        // Large files skip anything another step already listed, so they wait for the rest.
+        add("large files", filterIndex(index, excluding: claimed, skipFiles: Set(downloads.map(\.path))).largeFiles, report: progress)
 
         return DiskReport(items: items.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }, scannedAt: Date())
     }
@@ -319,7 +353,15 @@ public struct DiskScanner {
         let devices = home.appendingPathComponent("Library/Developer/CoreSimulator/Devices")
         // Checked first: on a Mac without Xcode, running xcrun offers to install the developer tools.
         guard exists(devices), let xcrun = toolPath("xcrun") else { return nil }
-        let dirs = unavailableSimulators().filter(exists)
+        // simctl takes about half a second, so its answer is remembered until a device is added or removed.
+        var st = stat()
+        let changed = lstat(devices.path, &st) == 0 ? st.st_mtimespec.tv_sec * 1_000_000_000 + st.st_mtimespec.tv_nsec : 0
+        let listed = scanMemory?.simulators(devicesChanged: changed, now: now) ?? {
+            let found = unavailableSimulators().map(\.path)
+            scanMemory?.storeSimulators(found, devicesChanged: changed, now: now)
+            return found
+        }()
+        let dirs = listed.map { URL(fileURLWithPath: $0) }.filter(exists)
         let size = sizes(dirs, isCancelled: isCancelled).reduce(0, +)
         guard size >= minArtifactBytes else { return nil }
         return DiskItem(name: "Unavailable simulators", path: devices.path, bytes: size, kind: .cache,
@@ -392,14 +434,14 @@ public struct DiskScanner {
     }
 
     /// From Spotlight's index when it covers the home folder (under a second), otherwise by walking
-    /// it, or from the last walk (re-checked) when `homeWalkCache` still has a good one.
+    /// it, or from the last walk (re-checked) when `scanMemory` still has a good one.
     func homeIndex(isCancelled: () -> Bool) -> HomeIndex {
         if useSpotlight, let index = spotlightIndex() { return index }
-        let key = HomeWalkCache.Key(root: Self.realPath(home.path), largeFileBytes: largeFileBytes,
+        let key = ScanMemory.Key(root: Self.realPath(home.path), largeFileBytes: largeFileBytes,
                                     maxNodeModulesDepth: maxNodeModulesDepth, coversProtected: !avoidProtectedFolders)
-        if let last = homeWalkCache?.reusable(key, now: now) { return recheck(last) }
+        if let last = scanMemory?.reusable(key, now: now) { return recheck(last) }
         let index = walkIndex(isCancelled: isCancelled)
-        if !isCancelled() { homeWalkCache?.store(index, key: key, now: now) }
+        if !isCancelled() { scanMemory?.store(index, key: key, now: now) }
         return index
     }
 
@@ -535,7 +577,6 @@ public struct DiskScanner {
     /// Dependency and build folders inside projects you haven't touched in `activeDays`.
     /// `listed` holds folders another step already found (node_modules), so they aren't listed twice.
     func buildArtifacts(in projects: Set<String>, listed: Set<String> = [], isCancelled: () -> Bool) -> [DiskItem] {
-        let fm = FileManager.default
         // Each project costs a few small reads, so they're checked side by side (1,500 projects: 4 s → under 1 s).
         let roots = projects.sorted()
         var perProject = [[(dir: URL, make: (Int64) -> DiskItem)]](repeating: [], count: roots.count)
@@ -543,13 +584,22 @@ public struct DiskScanner {
         DispatchQueue.concurrentPerform(iterations: roots.count) { i in
             guard !isCancelled() else { return }
             let root = URL(fileURLWithPath: roots[i])
+            // Most projects (1,300 of 1,500 here) have no build folder, so one bulk read of the folder's
+            // names rules them out; only the rest get dates and git checks (0.42 s → 0.1 s for all of them).
+            let fd = open(root.path, O_RDONLY | O_DIRECTORY)
+            guard fd >= 0 else { return }
+            var names: [String] = []
+            Self.forEachEntry(fd) { name, type, _ in
+                if type == VDIR.rawValue, Self.artifacts[String(cString: name)] != nil { names.append(String(cString: name)) }
+            }
+            close(fd)
+            let builds = names.map { root.appendingPathComponent($0) }.filter { !listed.contains(Self.realPath($0.path)) }
+            guard !builds.isEmpty else { return }
             let activity = lastActivity(ofProject: root)
             if isActive(activity) { return } // live project
             var found: [(dir: URL, make: (Int64) -> DiskItem)] = []
-            for (folder, rebuild) in Self.artifacts {
-                let dir = root.appendingPathComponent(folder)
-                var isDir: ObjCBool = false
-                guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue, !listed.contains(Self.realPath(dir.path)) else { continue }
+            for dir in builds {
+                let folder = dir.lastPathComponent, rebuild = Self.artifacts[folder]!
                 let written = try? dir.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
                 if isActive(written) { continue } // a build may be running
                 let idle = daysSince(activity).map { "\(HumanFormat.duration(minutes: $0 * 1440)) ago" } ?? "a long time ago"
@@ -950,11 +1000,12 @@ public final class SizeCache {
     }
 }
 
-/// The last walk of the home folder (large files, projects, node_modules), so a refresh doesn't
-/// walk it again: about 7 s on a home folder of 1.75 million files, against a few milliseconds to
-/// re-check what it found. Reused for `maxAge`; new large files and projects show up after that or on
-/// a Rescan, which sets `reuse` to false.
-public final class HomeWalkCache {
+/// Answers that are slow to get and rarely change, kept between scans so a refresh doesn't redo them:
+/// the last walk of the home folder (large files, projects, node_modules: about 7 s on a home folder of
+/// 1.75 million files, against a few milliseconds to re-check what it found) and simctl's list of
+/// unavailable simulators (about 0.5 s). Reused for `maxAge`; new large files and projects show up after
+/// that or on a Rescan, which sets `reuse` to false.
+public final class ScanMemory {
     struct Key: Codable, Equatable {
         var root: String
         var largeFileBytes: Int64
@@ -967,7 +1018,18 @@ public final class HomeWalkCache {
         var index: DiskScanner.HomeIndex
         var walkedAt: Date
     }
+    struct Simulators: Codable {
+        var paths: [String]
+        /// The Devices folder's modification time in nanoseconds when simctl was asked (changes when a device is added or removed).
+        var devicesChanged: Int
+        var listedAt: Date
+    }
+    struct File: Codable {
+        var walk: Saved?
+        var simulators: Simulators?
+    }
     private var saved: Saved?
+    private var simulatorList: Simulators?
     private let lock = NSLock()
     public var maxAge: TimeInterval = 6 * 3600
     public var reuse = true
@@ -977,12 +1039,24 @@ public final class HomeWalkCache {
     /// Loads the walk saved by an earlier run, so a relaunch doesn't mean walking again.
     public convenience init(contentsOf url: URL) {
         self.init()
-        if let data = try? Data(contentsOf: url) { saved = try? HabitStore.decoder.decode(Saved.self, from: data) }
+        if let data = try? Data(contentsOf: url), let file = try? HabitStore.decoder.decode(File.self, from: data) {
+            saved = file.walk; simulatorList = file.simulators
+        }
     }
 
     public func save(to url: URL) {
-        lock.lock(); let snapshot = saved; lock.unlock()
-        if let snapshot, let data = try? HabitStore.encoder.encode(snapshot) { try? data.write(to: url, options: .atomic) }
+        lock.lock(); let file = File(walk: saved, simulators: simulatorList); lock.unlock()
+        if let data = try? HabitStore.encoder.encode(file) { try? data.write(to: url, options: .atomic) }
+    }
+
+    func simulators(devicesChanged: Int, now: Date) -> [String]? {
+        lock.lock(); defer { lock.unlock() }
+        guard reuse, let s = simulatorList, s.devicesChanged == devicesChanged, now.timeIntervalSince(s.listedAt) < maxAge else { return nil }
+        return s.paths
+    }
+
+    func storeSimulators(_ paths: [String], devicesChanged: Int, now: Date) {
+        lock.lock(); simulatorList = Simulators(paths: paths, devicesChanged: devicesChanged, listedAt: now); lock.unlock()
     }
 
     /// The last walk, if it was made the same way and recently enough. One that read the protected

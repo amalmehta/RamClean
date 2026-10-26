@@ -145,11 +145,17 @@ struct OverviewView: View {
                 bar(.disk, UsageBar(title: "Disk used", value: 1 - s.diskFreeFraction,
                          detail: "\(Format.bytes(UInt64(max(0, s.diskFree)))) free of \(Format.bytes(UInt64(max(0, s.diskTotal))))"
                             + (model.diskFullInDays.map { $0 <= 30 ? " · full in ~\(max(1, Int($0.rounded()))) day\(Int($0.rounded()) <= 1 ? "" : "s") at this rate" : "" } ?? ""),
-                         tint: (1 - s.diskFreeFraction) * 100 >= model.prefs.diskAlertUsedPercent - 5 ? .red : .purple, hint: "What to clear"))
+                         tint: (1 - s.diskFreeFraction) * 100 >= model.prefs.diskAlertUsedPercent - 5 ? .red : .purple, hint: diskHint))
             }
         } else {
             ProgressView().frame(maxWidth: .infinity)
         }
+    }
+
+    /// Says up front how much the last scan found to win back, so the card is worth clicking.
+    private var diskHint: String {
+        let wins = model.diskReport?.totals.reduce(Int64(0)) { $0 + $1.bytes } ?? 0
+        return wins >= 1_073_741_824 ? "Clear up to \(Format.bytes(UInt64(wins)))" : "What to clear"
     }
 
     private func bar(_ p: UsagePanel, _ content: UsageBar) -> some View {

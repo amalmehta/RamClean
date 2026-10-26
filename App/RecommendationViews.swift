@@ -104,10 +104,14 @@ struct RecommendationRow: View {
 }
 
 /// Popover for the Disk bar: rebuildable caches, large files and the Trash, each with Move to Trash
-/// or, for tools that have one, their own cleanup command.
+/// or, for tools that have one, their own cleanup command. Tick several (or "Select all safe")
+/// and move them to the Trash together with one confirmation.
 struct DiskRecommendations: View {
     @EnvironmentObject var model: AppModel
     @State private var pending: DiskItem?
+    /// Paths ticked for moving to the Trash together.
+    @State private var selected: Set<String> = []
+    @State private var confirmSelected = false
     @State private var pendingCleanup: DiskItem?
     @State private var pendingMove: (item: DiskItem, folder: URL, name: String)?
     @State private var error: String?
@@ -124,8 +128,7 @@ struct DiskRecommendations: View {
                         ForEach(DiskItem.Kind.allCases, id: \.self) { kind in
                             let items = report.items(kind)
                             if !items.isEmpty {
-                                Text(kind.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                                    .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 4)
+                                sectionHeader(kind, items: items)
                                 ForEach(items) { item in
                                     row(item)
                                     Divider().opacity(0.5)
@@ -142,8 +145,11 @@ struct DiskRecommendations: View {
             } else {
                 Spacer()
             }
+            if !selectedItems.isEmpty { selectionBar }
         }
         .frame(width: 560, height: 560)
+        // Drop ticks for anything that's gone (trashed, cleaned up, or missing from a new scan).
+        .onChange(of: model.diskReport?.items.map(\.path)) { _, paths in selected.formIntersection(paths ?? []) }
         // Show the last results right away; refresh them in the background if they're over 30 minutes old.
         .onAppear {
             if let r = model.diskReport, Date().timeIntervalSince(r.scannedAt) < 30 * 60 { return }
@@ -172,13 +178,64 @@ struct DiskRecommendations: View {
                 Text("\(Format.bytes(UInt64(max(0, m.item.bytes ?? 0)))) will be copied to \(m.folder.path), then removed from this Mac once the copy is complete.")
             }
         }
+        .confirmationDialog(selectedItems.count == 1 ? "Move “\(selectedItems[0].name)” to the Trash?" : "Move \(selectedItems.count) items to the Trash?",
+                            isPresented: $confirmSelected) {
+            Button("Move to Trash", role: .destructive) {
+                error = model.moveToTrash(selectedItems)
+                selected.removeAll()
+            }
+        } message: {
+            let cautions = selectedItems.filter { $0.caution != nil }
+            Text("Frees \(Format.bytes(UInt64(selectedBytes))) once you empty the Trash. You can put them back from the Trash until then."
+                 + (cautions.isEmpty ? "" : "\n\nCheck first: " + cautions.map { "\($0.name) (\($0.caution!))" }.joined(separator: "; ")))
+        }
         .alert("That didn't work", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK") { error = nil }
         } message: { Text(error ?? "") }
     }
 
+    private var selectedItems: [DiskItem] { (model.diskReport?.items ?? []).filter { selected.contains($0.path) } }
+    private var selectedBytes: Int64 { selectedItems.reduce(0) { $0 + max(0, $1.bytes ?? 0) } }
+
+    private func sectionHeader(_ kind: DiskItem.Kind, items: [DiskItem]) -> some View {
+        let trashable = Set(items.filter(\.canTrash).map(\.path))
+        return HStack {
+            Text(kind.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Spacer()
+            if !trashable.isEmpty {
+                let all = trashable.isSubset(of: selected)
+                Button(all ? "Deselect all" : "Select all") {
+                    if all { selected.subtract(trashable) } else { selected.formUnion(trashable) }
+                }
+                .buttonStyle(.link).font(.caption)
+                .accessibilityLabel("\(all ? "Deselect" : "Select") all \(kind.shortTitle.lowercased())")
+            }
+        }
+        .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 4)
+    }
+
+    /// Pinned under the list while anything is ticked.
+    private var selectionBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 10) {
+                Text("\(selectedItems.count) selected · \(Format.bytes(UInt64(selectedBytes)))")
+                    .font(.callout.weight(.medium)).monospacedDigit()
+                Spacer()
+                Button("Clear Selection") { selected.removeAll() }.controlSize(.small)
+                Button("Move to Trash", role: .destructive) { confirmSelected = true }
+                    .buttonStyle(.borderedProminent).tint(.red).controlSize(.small)
+                    .keyboardShortcut(.delete, modifiers: .command)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+        }
+        .background(.bar)
+    }
+
     private func row(_ item: DiskItem) -> DiskRow {
         DiskRow(item: item, moving: model.movingPaths.contains(item.path), cleaning: model.cleaningPaths.contains(item.path),
+                selected: item.canTrash ? Binding(get: { selected.contains(item.path) },
+                                                  set: { if $0 { selected.insert(item.path) } else { selected.remove(item.path) } }) : nil,
                 onTrash: { pending = item }, onCleanup: { pendingCleanup = item },
                 onMove: { folder, name in pendingMove = (item, folder, name) })
     }
@@ -205,8 +262,16 @@ struct DiskRecommendations: View {
                 }
             }
             Spacer()
-            Button("Rescan") { model.scanDisk(fresh: true) }.disabled(model.diskScanStep != nil)
-                .help("Measure everything again from scratch")
+            VStack(alignment: .trailing, spacing: 6) {
+                Button("Rescan") { model.scanDisk(fresh: true) }.disabled(model.diskScanStep != nil)
+                    .help("Measure everything again from scratch")
+                if let safe = model.diskReport?.safeToClear, !safe.isEmpty {
+                    let bytes = safe.reduce(Int64(0)) { $0 + ($1.bytes ?? 0) }
+                    Button("Select All Safe (\(Format.bytes(UInt64(bytes))))") { selected.formUnion(safe.map(\.path)) }
+                        .controlSize(.small)
+                        .help("Ticks every cache and old build folder that comes back on its own and has nothing to check first")
+                }
+            }
         }
         .padding(14)
     }
@@ -216,6 +281,8 @@ struct DiskRow: View {
     var item: DiskItem
     var moving: Bool
     var cleaning: Bool
+    /// Ticked to move to the Trash with others; nil when RamClean doesn't trash this kind.
+    var selected: Binding<Bool>?
     var onTrash: () -> Void
     var onCleanup: () -> Void
     var onMove: (URL, String) -> Void
@@ -224,6 +291,15 @@ struct DiskRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
+            Group {
+                if let selected {
+                    Toggle("", isOn: selected).toggleStyle(.checkbox).labelsHidden()
+                        .accessibilityLabel("Select \(item.name)")
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(width: 16, height: 26)
             Image(nsImage: DiskIcons.icon(for: item)).resizable().frame(width: 26, height: 26)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {

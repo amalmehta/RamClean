@@ -708,20 +708,34 @@ final class AppModel: ObservableObject {
     /// Moves an item to the Trash (recoverable until you empty it). Returns an error message on failure.
     func moveToTrash(_ item: DiskItem) -> String? {
         guard item.canTrash else { return "RamClean doesn't remove this one itself." }
-        guard allowed("Moving files to the Trash") else { return nil }
-        do {
-            try FileManager.default.trashItem(at: URL(fileURLWithPath: item.path), resultingItemURL: nil)
-        } catch {
-            return error.localizedDescription
+        return moveToTrash([item])
+    }
+
+    /// Moves several items to the Trash in one go; ones that fail are named in the returned message.
+    func moveToTrash(_ items: [DiskItem]) -> String? {
+        let items = items.filter(\.canTrash)
+        guard !items.isEmpty, allowed("Moving files to the Trash") else { return nil }
+        var failures: [String] = []
+        var trashed: Set<String> = []
+        for item in items {
+            do {
+                try FileManager.default.trashItem(at: URL(fileURLWithPath: item.path), resultingItemURL: nil)
+            } catch {
+                failures.append("\(item.name): \(error.localizedDescription)")
+                continue
+            }
+            trashed.insert(item.id)
+            habitStore.log(.movedToTrash, key: "disk", name: item.name,
+                           detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) · \(item.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))",
+                           bytes: UInt64(max(0, item.bytes ?? 0)), at: Date())
         }
-        habitStore.log(.movedToTrash, key: "disk", name: item.name,
-                       detail: "\(Format.bytes(UInt64(max(0, item.bytes ?? 0)))) · \(item.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))",
-                       bytes: UInt64(max(0, item.bytes ?? 0)), at: Date())
-        diskReport?.items.removeAll { $0.id == item.id }
-        saveDiskReport()
-        refreshEvents()
-        tick()
-        return nil
+        if !trashed.isEmpty {
+            diskReport?.items.removeAll { trashed.contains($0.id) }
+            saveDiskReport()
+            refreshEvents()
+            tick()
+        }
+        return failures.isEmpty ? nil : failures.joined(separator: "\n")
     }
 
     /// Runs an item's own cleanup command (e.g. `xcrun simctl delete unavailable`) in the background

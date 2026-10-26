@@ -75,6 +75,16 @@ final class LicensingTests: XCTestCase {
         XCTAssertEqual(rolledBack.state(now: t0), .trial(daysLeft: 14), "the clock is treated as day 10, not day 0")
     }
 
+    func testAFreeCopyHasNoTrialAndNothingLocked() {
+        var free = config
+        free.isFree = true
+        let l = make(t0, config: free)
+        XCTAssertEqual(l.state(now: t0 + 400 * day), .free, "even with a store set up, free wins")
+        XCTAssertTrue(l.state(now: t0 + 400 * day).unlocksActions)
+        XCTAssertFalse(l.needsCheck(now: t0 + 400 * day))
+        XCTAssertTrue(ProductConfig.ramClean.isFree, "RamClean ships free; Pro comes later")
+    }
+
     func testNothingLocksUntilSalesAreSetUp() {
         var unset = config
         unset.lemonSqueezyStoreID = 0

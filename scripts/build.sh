@@ -15,7 +15,8 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q '"RamClean Dev
   echo "Signing with RamClean Development"
 fi
 if ! xcodebuild -project RamClean.xcodeproj -scheme RamClean -configuration Release \
-  -destination 'platform=macOS' -derivedDataPath build/DerivedData "${sign[@]}" build > "$log" 2>&1; then
+  -destination 'generic/platform=macOS' ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+  -derivedDataPath build/DerivedData "${sign[@]}" build > "$log" 2>&1; then  # universal: Apple silicon and Intel
   grep -E "error:" "$log" || tail -20 "$log"
   echo "Build failed; build/RamClean.app is unchanged. Full log: $log" >&2
   exit 1

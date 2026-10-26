@@ -25,15 +25,19 @@ public struct ProductConfig: Sendable {
     public var lemonSqueezyProductID: Int
     /// Lemon Squeezy's public License API. It needs no secret key.
     public var licenceAPI: URL
+    /// Free for everyone: no trial clock, no Buy button, nothing locked. The licence code stays
+    /// for a paid Pro version later; set this to false and fill in the store to turn it on.
+    public var isFree: Bool
 
     public init(name: String, price: String, trialDays: Int, offlineGraceDays: Int, recheckHours: Double,
                 checkoutURL: URL, websiteURL: URL, appcastURL: URL,
                 lemonSqueezyStoreID: Int, lemonSqueezyProductID: Int,
-                licenceAPI: URL = URL(string: "https://api.lemonsqueezy.com/v1/licenses")!) {
+                licenceAPI: URL = URL(string: "https://api.lemonsqueezy.com/v1/licenses")!, isFree: Bool = false) {
         self.name = name; self.price = price; self.trialDays = trialDays; self.offlineGraceDays = offlineGraceDays
         self.recheckHours = recheckHours; self.checkoutURL = checkoutURL; self.websiteURL = websiteURL
         self.appcastURL = appcastURL; self.lemonSqueezyStoreID = lemonSqueezyStoreID
         self.lemonSqueezyProductID = lemonSqueezyProductID; self.licenceAPI = licenceAPI
+        self.isFree = isFree
     }
 
     /// Placeholder text that scripts/release.sh refuses to ship.
@@ -49,7 +53,8 @@ public struct ProductConfig: Sendable {
         websiteURL: URL(string: "https://REPLACE-ME.example.com")!,
         appcastURL: URL(string: "https://REPLACE-ME.example.com/updates/appcast.xml")!,
         lemonSqueezyStoreID: 0,
-        lemonSqueezyProductID: 0
+        lemonSqueezyProductID: 0,
+        isFree: true
     )
 
     /// True once the store and product IDs and the checkout link are filled in. Until then the

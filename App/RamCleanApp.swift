@@ -25,7 +25,7 @@ struct RamCleanApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updater.checkForUpdates() }.disabled(!updater.canCheck)
-                Button("Licence…") { model.showLicenceSettings() }
+                if !model.licensing.config.isFree { Button("Licence…") { model.showLicenceSettings() } }
             }
         }
 

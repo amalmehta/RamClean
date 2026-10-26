@@ -185,7 +185,7 @@ struct LicenceBadge: View {
 
     var body: some View {
         switch model.licence {
-        case .licensed, .salesNotSetUp:
+        case .licensed, .salesNotSetUp, .free:
             EmptyView()
         default:
             Button { model.showLicenceSettings() } label: {
@@ -204,6 +204,7 @@ struct LicenceBadge: View {
         case .offlineGrace: return "wifi.slash"
         case .expired: return "lock.fill"
         case .salesNotSetUp: return "hammer"
+        case .free: return "gift"
         }
     }
 

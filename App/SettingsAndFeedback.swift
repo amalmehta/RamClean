@@ -14,7 +14,9 @@ struct SettingsView: View {
             ThresholdSettings().tabItem { Label("Thresholds", systemImage: "slider.horizontal.3") }.tag(SettingsTab.thresholds)
             ProtectionSettings().tabItem { Label("Protection", systemImage: "lock.shield") }.tag(SettingsTab.protection)
             DataSettings().tabItem { Label("Data", systemImage: "externaldrive") }.tag(SettingsTab.data)
-            LicenceSettings().tabItem { Label("Licence", systemImage: "key") }.tag(SettingsTab.licence)
+            if !model.licensing.config.isFree {  // no licence to show while RamClean is free
+                LicenceSettings().tabItem { Label("Licence", systemImage: "key") }.tag(SettingsTab.licence)
+            }
         }
         .frame(width: 560, height: 470)
     }

@@ -29,6 +29,8 @@ public enum LicenceState: Equatable, Sendable {
     case expired(Expiry)
     /// ProductConfig has no store yet: a development copy, with nothing locked.
     case salesNotSetUp
+    /// ProductConfig.isFree: everything works for everyone, with no trial and nothing to buy.
+    case free
 
     public enum Expiry: Equatable, Sendable { case trialOver, offlineTooLong }
 
@@ -52,6 +54,7 @@ public enum LicenceState: Equatable, Sendable {
         case .expired(.trialOver): return "Trial ended"
         case .expired(.offlineTooLong): return "Licence check overdue"
         case .salesNotSetUp: return "Development copy"
+        case .free: return "Free"
         }
     }
 
@@ -69,6 +72,8 @@ public enum LicenceState: Equatable, Sendable {
             return "\(config.name) hasn't reached the licence server for \(config.offlineGraceDays) days. Connect to the internet and press Check Now."
         case .salesNotSetUp:
             return "Licensing isn't set up in ProductConfig yet (see docs/GO-LIVE.md), so nothing is locked."
+        case .free:
+            return "\(config.name) is free for everyone, with nothing locked."
         }
     }
 }
@@ -110,6 +115,7 @@ public final class Licensing {
     }
 
     public func state(now: Date = Date()) -> LicenceState {
+        if config.isFree { return .free }
         guard config.salesReady else { return .salesNotSetUp }
         let now = max(now, lastSeen)
         let day: TimeInterval = 86_400
@@ -126,7 +132,7 @@ public final class Licensing {
 
     /// True when a licensed copy is due a check: every `recheckHours`, or hourly while offline.
     public func needsCheck(now: Date = Date()) -> Bool {
-        guard config.salesReady, let r = record else { return false }
+        guard !config.isFree, config.salesReady, let r = record else { return false }
         guard let last = lastAttempt else { return true }
         let every = r.offlineSince == nil ? config.recheckHours * 3600 : 3600
         return now.timeIntervalSince(last) >= every

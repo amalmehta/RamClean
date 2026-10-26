@@ -143,6 +143,8 @@ public struct DiskScanner {
     public var unavailableSimulators: () -> [URL] = DiskScanner.listUnavailableSimulators
     /// Sizes remembered from earlier scans, reused when a folder hasn't changed (nil: always measure).
     public var sizeCache: SizeCache?
+    /// The last walk of the home folder, reused for a while when Spotlight isn't indexing it (nil: always walk).
+    public var homeWalkCache: HomeWalkCache?
     /// Stay out of Desktop, Documents and Downloads. Reading them can raise a macOS permission
     /// prompt that blocks the scan until someone answers, so background scans set this until
     /// you've run a scan yourself. Spotlight's large-file results there still count (no access needed).
@@ -377,16 +379,47 @@ public struct DiskScanner {
 
     /// Large files, code-project marker files and node_modules folders in the home folder,
     /// before filtering against the other steps' results.
-    struct HomeIndex {
-        var big: [(path: String, size: Int64, opened: Date?)] = []
+    struct HomeIndex: Codable {
+        struct Big: Codable {
+            var path: String
+            var size: Int64
+            var opened: Date?
+        }
+        var big: [Big] = []
         var markers: [String] = []
         /// Top-level node_modules folders within `maxNodeModulesDepth`, outside ~/Library and hidden folders.
         var nodeModules: [String] = []
     }
 
-    /// From Spotlight's index when it covers the home folder (under a second), otherwise by walking it.
+    /// From Spotlight's index when it covers the home folder (under a second), otherwise by walking
+    /// it, or from the last walk (re-checked) when `homeWalkCache` still has a good one.
     func homeIndex(isCancelled: () -> Bool) -> HomeIndex {
-        (useSpotlight ? spotlightIndex() : nil) ?? walkIndex(isCancelled: isCancelled)
+        if useSpotlight, let index = spotlightIndex() { return index }
+        let key = HomeWalkCache.Key(root: Self.realPath(home.path), largeFileBytes: largeFileBytes,
+                                    maxNodeModulesDepth: maxNodeModulesDepth, coversProtected: !avoidProtectedFolders)
+        if let last = homeWalkCache?.reusable(key, now: now) { return recheck(last) }
+        let index = walkIndex(isCancelled: isCancelled)
+        if !isCancelled() { homeWalkCache?.store(index, key: key, now: now) }
+        return index
+    }
+
+    /// An earlier walk brought up to date for what it already lists: files and folders since
+    /// removed are dropped, and large files get their current size and last-opened date.
+    /// Protected folders are left as they were while RamClean stays out of them.
+    func recheck(_ index: HomeIndex) -> HomeIndex {
+        var out = HomeIndex()
+        for b in index.big {
+            if isProtected(b.path) { out.big.append(b); continue }
+            var st = stat()
+            guard lstat(b.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { continue }
+            let size = Int64(st.st_blocks) * 512
+            guard size >= largeFileBytes else { continue }
+            out.big.append(.init(path: b.path, size: size,
+                                 opened: Date(timeIntervalSince1970: TimeInterval(max(st.st_atimespec.tv_sec, st.st_mtimespec.tv_sec)))))
+        }
+        out.markers = index.markers.filter { isProtected($0) || FileManager.default.fileExists(atPath: $0) }
+        out.nodeModules = index.nodeModules.filter { isProtected($0) || FileManager.default.fileExists(atPath: $0) }
+        return out
     }
 
     /// Nil when Spotlight can't run the queries or isn't indexing the home folder: with indexing
@@ -410,7 +443,7 @@ public struct DiskScanner {
                 guard let path = Spotlight.string(item, kMDItemPath) else { return nil }
                 let size = (Spotlight.number(item, "kMDItemPhysicalSize" as CFString) ?? Spotlight.number(item, kMDItemFSSize)).map(Int64.init) ?? 0
                 let opened = [Spotlight.date(item, kMDItemLastUsedDate), Spotlight.date(item, kMDItemFSContentChangeDate)].compactMap { $0 }.max()
-                return (path, size, opened)
+                return HomeIndex.Big(path: path, size: size, opened: opened)
             },
             markers: markers.compactMap { Spotlight.string($0, kMDItemPath) },
             nodeModules: nodeModules.compactMap { Spotlight.string($0, kMDItemPath) }.filter { path in
@@ -431,7 +464,7 @@ public struct DiskScanner {
         let markerStarts = Set(Self.projectMarkers.map { $0.utf8.first! }), markerLengths = Set(Self.projectMarkers.map(\.utf8.count))
         let lock = NSLock()
         Self.walkFolders([root], isCancelled: isCancelled) { _, path, depth, fd, buf in
-            var big: [(String, Int64, Date?)] = [], markers: [String] = [], modules: [String] = [], subdirs: [String] = []
+            var big: [HomeIndex.Big] = [], markers: [String] = [], modules: [String] = [], subdirs: [String] = []
             Self.forEachEntry(fd, buffer: buf) { namePtr, type, allocated in
                 guard namePtr[0] != 0x2E else { return } // hidden ("." names)
                 if type == VREG.rawValue {
@@ -440,7 +473,7 @@ public struct DiskScanner {
                         var st = stat()
                         let opened = lstat(file, &st) == 0
                             ? Date(timeIntervalSince1970: TimeInterval(max(st.st_atimespec.tv_sec, st.st_mtimespec.tv_sec))) : nil
-                        big.append((file, allocated, opened))
+                        big.append(.init(path: file, size: allocated, opened: opened))
                     }
                     // Most files can't be a marker by their first letter and length, so no String is made for them.
                     if markerStarts.contains(UInt8(bitPattern: namePtr[0])), markerLengths.contains(strlen(namePtr)) {
@@ -914,6 +947,56 @@ public final class SizeCache {
         lock.lock()
         entries[url.path] = Entry(bytes: bytes, mtimeSec: st.st_mtimespec.tv_sec, mtimeNsec: st.st_mtimespec.tv_nsec, measuredAt: now)
         lock.unlock()
+    }
+}
+
+/// The last walk of the home folder (large files, projects, node_modules), so a refresh doesn't
+/// walk it again: about 7 s on a home folder of 1.75 million files, against a few milliseconds to
+/// re-check what it found. Reused for `maxAge`; new large files and projects show up after that or on
+/// a Rescan, which sets `reuse` to false.
+public final class HomeWalkCache {
+    struct Key: Codable, Equatable {
+        var root: String
+        var largeFileBytes: Int64
+        var maxNodeModulesDepth: Int
+        /// Whether the walk read Desktop, Documents and Downloads.
+        var coversProtected: Bool
+    }
+    struct Saved: Codable {
+        var key: Key
+        var index: DiskScanner.HomeIndex
+        var walkedAt: Date
+    }
+    private var saved: Saved?
+    private let lock = NSLock()
+    public var maxAge: TimeInterval = 6 * 3600
+    public var reuse = true
+
+    public init() {}
+
+    /// Loads the walk saved by an earlier run, so a relaunch doesn't mean walking again.
+    public convenience init(contentsOf url: URL) {
+        self.init()
+        if let data = try? Data(contentsOf: url) { saved = try? HabitStore.decoder.decode(Saved.self, from: data) }
+    }
+
+    public func save(to url: URL) {
+        lock.lock(); let snapshot = saved; lock.unlock()
+        if let snapshot, let data = try? HabitStore.encoder.encode(snapshot) { try? data.write(to: url, options: .atomic) }
+    }
+
+    /// The last walk, if it was made the same way and recently enough. One that read the protected
+    /// folders also serves a scan that stays out of them, not the other way round.
+    func reusable(_ key: Key, now: Date) -> DiskScanner.HomeIndex? {
+        lock.lock(); defer { lock.unlock() }
+        guard reuse, let s = saved, now.timeIntervalSince(s.walkedAt) < maxAge, s.key.root == key.root,
+              s.key.largeFileBytes == key.largeFileBytes, s.key.maxNodeModulesDepth == key.maxNodeModulesDepth,
+              s.key.coversProtected || !key.coversProtected else { return nil }
+        return s.index
+    }
+
+    func store(_ index: DiskScanner.HomeIndex, key: Key, now: Date) {
+        lock.lock(); saved = Saved(key: key, index: index, walkedAt: now); lock.unlock()
     }
 }
 

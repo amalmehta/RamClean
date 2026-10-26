@@ -538,6 +538,55 @@ final class RecommendationTests: XCTestCase {
         XCTAssertTrue(sc.walkIndex(isCancelled: { true }).big.isEmpty, "stops when cancelled")
     }
 
+    func testRefreshReusesTheLastHomeWalkAndRechecksIt() throws {
+        try write("Movies/big.mov", mb: 4)
+        try write("Movies/gone.mov", mb: 4)
+        try write("Code/app/package.json", mb: 0)
+        try write("Documents/doc.mov", mb: 4)
+        let real = DiskScanner.realPath(home.path)
+        var sc = scanner()
+        sc.homeWalkCache = HomeWalkCache()
+        XCTAssertEqual(sc.homeIndex(isCancelled: { false }).big.count, 3)
+
+        // Changes after the walk: one file removed, one grown, one new file and one new project.
+        try FileManager.default.removeItem(at: home.appendingPathComponent("Movies/gone.mov"))
+        try write("Movies/big.mov", mb: 6)
+        try write("Movies/new.mov", mb: 4)
+        try write("Code/new/Cargo.toml", mb: 0)
+        let reused = sc.homeIndex(isCancelled: { false })
+        XCTAssertEqual(Set(reused.big.map(\.path)), [real + "/Movies/big.mov", real + "/Documents/doc.mov"], "removed file dropped; new one waits")
+        XCTAssertGreaterThanOrEqual(reused.big.first { $0.path.hasSuffix("big.mov") }?.size ?? 0, 6 * 1_048_576, "current size")
+        XCTAssertEqual(reused.markers, [real + "/Code/app/package.json"])
+
+        // A walk that read Documents serves a scan that stays out of them…
+        sc.avoidProtectedFolders = true
+        XCTAssertEqual(sc.homeIndex(isCancelled: { false }).markers, [real + "/Code/app/package.json"])
+        // …but a walk that skipped them doesn't serve one that reads them.
+        var quiet = scanner()
+        quiet.avoidProtectedFolders = true
+        quiet.homeWalkCache = HomeWalkCache()
+        _ = quiet.homeIndex(isCancelled: { false })
+        quiet.avoidProtectedFolders = false
+        XCTAssertTrue(quiet.homeIndex(isCancelled: { false }).big.contains { $0.path.hasSuffix("doc.mov") })
+
+        // Saved and reloaded (an app relaunch): still reused.
+        sc.avoidProtectedFolders = false
+        let file = home.appendingPathComponent("walk.json")
+        sc.homeWalkCache!.save(to: file)
+        sc.homeWalkCache = HomeWalkCache(contentsOf: file)
+        XCTAssertFalse(sc.homeIndex(isCancelled: { false }).big.contains { $0.path.hasSuffix("new.mov") })
+
+        // Too old, or Rescan: walked again, so the new file and project show up.
+        sc.homeWalkCache!.reuse = false
+        let fresh = sc.homeIndex(isCancelled: { false })
+        XCTAssertTrue(fresh.big.contains { $0.path.hasSuffix("new.mov") })
+        XCTAssertEqual(Set(fresh.markers), [real + "/Code/app/package.json", real + "/Code/new/Cargo.toml"])
+        sc.homeWalkCache!.reuse = true
+        try write("Movies/newer.mov", mb: 4)
+        sc.now = Date().addingTimeInterval(7 * 3600)
+        XCTAssertTrue(sc.homeIndex(isCancelled: { false }).big.contains { $0.path.hasSuffix("newer.mov") }, "older than maxAge")
+    }
+
     func testSafeToClearIsOnlyRebuildableItemsWithNothingToCheck() {
         let mb: Int64 = 1 << 20
         let report = DiskReport(items: [

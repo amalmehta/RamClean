@@ -67,6 +67,8 @@ final class AppModel: ObservableObject {
     /// Folder sizes remembered between disk scans (and app launches, via sizes.json), so
     /// refreshes only re-measure what changed.
     let sizeCache: SizeCache
+    /// The last walk of the home folder (via home-walk.json), used when Spotlight isn't indexing it.
+    let homeWalkCache: HomeWalkCache
 
     private let processSampler = ProcessSampler()
     private let systemSampler = SystemSampler()
@@ -109,6 +111,7 @@ final class AppModel: ObservableObject {
                               instanceName: SCDynamicStoreCopyComputerName(nil, nil) as String? ?? "Mac")
         prefs = Self.loadPrefs()
         sizeCache = SizeCache(contentsOf: dataDirectory.appendingPathComponent("sizes.json"))
+        homeWalkCache = HomeWalkCache(contentsOf: dataDirectory.appendingPathComponent("home-walk.json"))
         diskHistory = DiskHistory(contentsOf: dataDirectory.appendingPathComponent("disk-history.json"))
         // Last disk scan, so "What to clear" opens instantly; it refreshes in the background.
         if let data = try? Data(contentsOf: dataDirectory.appendingPathComponent("disk-report.json")),
@@ -663,11 +666,13 @@ final class AppModel: ObservableObject {
     func scanDisk(byUser: Bool = true, fresh: Bool = false) {
         guard diskScanStep == nil else { return }
         sizeCache.reuse = !fresh
+        homeWalkCache.reuse = !fresh
         diskScanStep = "starting"
         let askedKey = "RamCleanScannedProtectedFolders"
         var scanner = DiskScanner()
         scanner.avoidProtectedFolders = !byUser && !UserDefaults.standard.bool(forKey: askedKey)
         scanner.sizeCache = sizeCache
+        scanner.homeWalkCache = homeWalkCache
         scanner.staleDays = prefs.staleDays
         scanner.activeDays = prefs.activeDays
         let keep = prefs
@@ -779,6 +784,7 @@ final class AppModel: ObservableObject {
         guard let r = diskReport, let data = try? HabitStore.encoder.encode(r) else { return }
         try? data.write(to: dataDirectory.appendingPathComponent("disk-report.json"), options: .atomic)
         sizeCache.save(to: dataDirectory.appendingPathComponent("sizes.json"))
+        homeWalkCache.save(to: dataDirectory.appendingPathComponent("home-walk.json"))
     }
 
     /// Drives you can move big files to (external and network volumes, not this Mac's own disk).

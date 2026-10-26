@@ -264,7 +264,7 @@ struct DiskRecommendations: View {
             Spacer()
             VStack(alignment: .trailing, spacing: 6) {
                 Button("Rescan") { model.scanDisk(fresh: true) }.disabled(model.diskScanStep != nil)
-                    .help("Measure everything again from scratch")
+                    .help("Look for new files and measure everything again from scratch")
                 if let safe = model.diskReport?.safeToClear, !safe.isEmpty {
                     let bytes = safe.reduce(Int64(0)) { $0 + ($1.bytes ?? 0) }
                     Button("Select All Safe (\(Format.bytes(UInt64(bytes))))") { selected.formUnion(safe.map(\.path)) }

@@ -496,6 +496,62 @@ final class RecommendationTests: XCTestCase {
         XCTAssertEqual(reloaded.lastKnownSize(tree.path), DiskScanner.allocatedSize(tree))
     }
 
+    func testManyTreesSizedTogetherMatchFtsAndReportEachOnce() throws {
+        for i in 0..<4 { try write("t\(i)/x/y/f.bin", mb: i + 1); try write("t\(i)/g.bin", mb: 1) }
+        try write("single.bin", mb: 2)
+        let paths = (0..<4).map { home.appendingPathComponent("t\($0)").path } + [home.appendingPathComponent("single.bin").path, home.appendingPathComponent("missing").path]
+        let lock = NSLock()
+        var reported: [Int: Int64] = [:], calls = 0
+        let sizes = DiskScanner.allocatedSizes(paths, onEach: { i, size in lock.lock(); reported[i] = size; calls += 1; lock.unlock() })
+        XCTAssertEqual(sizes, paths.map(DiskScanner.ftsSize))
+        XCTAssertEqual(calls, paths.count, "each tree reported once, when it's done")
+        XCTAssertEqual(paths.indices.map { reported[$0] }, sizes)
+        XCTAssertEqual(sizes.last, 0)
+    }
+
+    func testHomeWalkFindsLargeFilesProjectsAndNodeModules() throws {
+        try write("Movies/big.mov", mb: 4)
+        try write("Code/app/package.json", mb: 0)
+        try write("Code/app/node_modules/dep/index.js", mb: 1)
+        try write("Code/app/node_modules/dep/package.json", mb: 0) // inside build output: not a project
+        try write("Code/app/dist/huge.bin", mb: 4)                 // inside build output: not a large file
+        try write(".hidden/big.bin", mb: 4)
+        try write(".hidden/proj/Cargo.toml", mb: 0)
+        try write("Library/big.bin", mb: 4)
+        try write("Documents/notes/big.bin", mb: 4)
+        try write("Documents/site/package.json", mb: 0)
+        var sc = scanner()
+        let real = DiskScanner.realPath(home.path)
+        var index = sc.walkIndex(isCancelled: { false })
+        XCTAssertEqual(Set(index.big.map(\.path)), [real + "/Movies/big.mov", real + "/Documents/notes/big.bin"])
+        XCTAssertNotNil(index.big.first?.opened)
+        XCTAssertEqual(Set(index.markers), [real + "/Code/app/package.json", real + "/Documents/site/package.json"])
+        XCTAssertEqual(index.nodeModules, [real + "/Code/app/node_modules"])
+
+        sc.avoidProtectedFolders = true
+        index = sc.walkIndex(isCancelled: { false })
+        XCTAssertEqual(index.big.map(\.path), [real + "/Movies/big.mov"], "Documents not read")
+        XCTAssertEqual(index.markers, [real + "/Code/app/package.json"])
+
+        sc.maxNodeModulesDepth = 2
+        XCTAssertEqual(sc.walkIndex(isCancelled: { false }).nodeModules, [], "deeper than the limit")
+        XCTAssertTrue(sc.walkIndex(isCancelled: { true }).big.isEmpty, "stops when cancelled")
+    }
+
+    func testSafeToClearIsOnlyRebuildableItemsWithNothingToCheck() {
+        let mb: Int64 = 1 << 20
+        let report = DiskReport(items: [
+            DiskItem(name: "npm cache", path: "/a", bytes: 5 * mb, kind: .cache, reason: ""),
+            DiskItem(name: "site › node_modules", path: "/b", bytes: 3 * mb, kind: .buildArtifact, reason: ""),
+            DiskItem(name: "Xcode archives", path: "/c", bytes: 9 * mb, kind: .cache, reason: "", caution: "Keep any you may need"),
+            DiskItem(name: "Homebrew cache", path: "/d", bytes: 4 * mb, kind: .cache, reason: "", canTrash: false, cleanupCommand: ["/b/brew", "cleanup"]),
+            DiskItem(name: "trip.mov", path: "/e", bytes: 8 * mb, kind: .largeFile, reason: ""),
+            DiskItem(name: "Old app", path: "/f", bytes: 2 * mb, kind: .unusedApp, reason: ""),
+            DiskItem(name: "unmeasured", path: "/g", bytes: nil, kind: .cache, reason: ""),
+        ], scannedAt: Date())
+        XCTAssertEqual(report.safeToClear.map(\.path), ["/a", "/b"])
+    }
+
     func testSummaryTotalsAndBiggestWins() {
         let gb: Int64 = 1 << 30
         let r = DiskReport(items: [

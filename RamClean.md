@@ -102,6 +102,7 @@ CHANGELOG:
 - 2026-10-02 — added a DELIVERABLES field after CONTEXT
 - 2026-10-02 — added meta-instruction: every project has a system design doc at docs/SYSTEM-DESIGN.md
 - 2026-10-05 — added meta-instruction: applications include a settings button or tab
+- 2026-10-25 — disk scan works without Spotlight: with indexing off it used to find no large files or projects; now one parallel walk finds them (7 s, was ~2.5 min); sizes on the same worker pool (1.6 s, was 2.1–2.8 s); the Disk card says how much you could clear; tick items, Select all per section or Select All Safe, and move them to the Trash with one confirmation
 - 2026-10-09 — Disk popover opens fast and leads with "Where to win space" (totals per category and the 3 biggest single wins); lazy rows, cached per-type icons (row icons cost 1.7 s before), at most 4 redraws a second while scanning
 - 2026-10-09 — remembered sizes survive relaunches (scan after relaunch 2.8 s, was ~11 s); caches appear as soon as each is measured; tried biggest-first ordering and dropped it (no measurable gain)
 - 2026-10-09 — faster disk scans: steps run at the same time, sizes read with getattrlistbulk in parallel, unchanged folders' sizes reused on refresh (refresh 2.8 s, was 12.7 s; first scan ~15% faster)

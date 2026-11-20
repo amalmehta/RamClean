@@ -8,12 +8,15 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case quit = "QUIT", keep = "KEEP", alwaysKeep = "ALWAYS_KEEP", forceQuit = "FORCE_QUIT", open = "OPEN"
         case relaunch = "RELAUNCH"
         case alertFix = "ALERT_FIX", alertShow = "ALERT_SHOW", alertSnooze = "ALERT_SNOOZE"
+        case autoCleanUndo = "AUTO_CLEAN_UNDO", autoCleanReview = "AUTO_CLEAN_REVIEW"
     }
 
     private static let suggestionCategory = "SUGGESTION"
     private static let forceCategory = "FORCE"
     private static let quitDoneCategory = "QUIT_DONE"
     private static let infoCategory = "INFO"
+    private static let autoCleanCategory = "AUTO_CLEAN"
+    static let autoCleanKey = "auto-clean"
     private static func fixCategory(_ r: Resource) -> String { "ALERT_WITH_FIX_\(r.rawValue.uppercased())" }
     private static let alertCategory = "ALERT"
 
@@ -67,6 +70,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 UNNotificationAction(identifier: Action.relaunch.rawValue, title: "Relaunch", options: []),
             ], intentIdentifiers: []),
             UNNotificationCategory(identifier: Self.infoCategory, actions: [], intentIdentifiers: []),
+            UNNotificationCategory(identifier: Self.autoCleanCategory, actions: [
+                UNNotificationAction(identifier: Action.autoCleanUndo.rawValue, title: "Undo", options: []),
+                UNNotificationAction(identifier: Action.autoCleanReview.rawValue, title: "Review", options: [.foreground]),
+            ], intentIdentifiers: []),
             UNNotificationCategory(identifier: Self.alertCategory, actions: [show, snooze], intentIdentifiers: []),
         ]
         let fixes = fixTitles.map { resource, title in
@@ -110,6 +117,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     func quitDone(key: String, name: String, body: String) {
         withdraw(["force-\(key)", "suggest-\(key)"])
         send(id: "quit-done-\(key)", title: "Quit \(name)", body: body, category: Self.quitDoneCategory, key: key, art: .quitDone)
+    }
+
+    /// What an automatic clean just did. Undo reopens the apps and puts the folders back;
+    /// Review opens the Activity Log. A newer clean replaces the older notice.
+    func autoCleaned(_ text: (title: String, body: String)) {
+        send(id: Self.autoCleanKey, title: text.title, body: text.body, category: Self.autoCleanCategory,
+             key: Self.autoCleanKey, art: .quitDone)
     }
 
     static let weeklyKey = "weekly"

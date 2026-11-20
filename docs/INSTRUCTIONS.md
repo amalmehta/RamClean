@@ -49,7 +49,7 @@ To time a real disk scan of your home folder, step by step:
 cd RamCleanCore && RAMCLEAN_BENCH=1 swift test --filter ScanBenchmark
 ```
 
-The 56 tests (3 opt-in benchmarks are skipped) cover licensing against a fake licence server (trial, activation, offline grace, refunds, deactivation), process grouping (helpers, and Claude Code inside Terminal), every protection rule, the habit log, the rule-of-thumb score, Create ML training (including apps it has never seen and the "regret" relabel), the notification policy (thresholds and cooldowns), loading preferences, the disk scanner on a fake home folder (including stale projects, unused apps and old downloads, and never active work), threshold alerts (sustain, repeat, recovery, snooze) and their recommendation text, the "why" text for each app, and a live smoke test of the samplers on this Mac.
+The 114 tests (3 opt-in benchmarks are skipped) cover automatic cleaning (when it runs, which apps and folders it may touch, its notification, and that its quits never count as your answers), licensing against a fake licence server (trial, activation, offline grace, refunds, deactivation), process grouping (helpers, and Claude Code inside Terminal), every protection rule, the habit log, the rule-of-thumb score, Create ML training (including apps it has never seen and the "regret" relabel), the notification policy (thresholds and cooldowns), loading preferences, the disk scanner on a fake home folder (including stale projects, unused apps and old downloads, and never active work), threshold alerts (sustain, repeat, recovery, snooze) and their recommendation text, the "why" text for each app, and a live smoke test of the samplers on this Mac.
 
 ## Using it
 
@@ -95,6 +95,16 @@ While a resource stays over its line, you're reminded at most once an hour. Afte
 
   RamClean never empties the Trash, and deletes nothing permanently except through a Clean Up command you confirm. Every move and cleanup is written to the habit log. Items to double-check (like Xcode archives, or an app's leftover settings) carry an orange note. The Docker disk image and the Trash are advice only. The first scan may make macOS ask for access to Desktop, Documents, Downloads or an external drive; RamClean only reads sizes there.
 
+**Clean up automatically (off until you turn it on).** Settings → General → **Clean up automatically**. Every 6 hours (8 or 12 if you prefer) RamClean, with nobody asked:
+- **quits apps marked deadweight** (score at or above your threshold, 70%) that you haven't had in front for 2 hours, use at least 400 MB, and have no unsaved changes. Protected apps (in front, playing audio, building, running Claude, always keep, work tools that are busy) are never touched. Apps are asked to quit politely, as with Quit.
+- **moves build folders of projects untouched for 30 days to the Trash**: the same ones **Select All Safe** ticks under "Build files in projects you've stopped working on". Each folder is checked again just before; one written to since is left alone. Caches, downloads, apps and large files are never cleaned automatically.
+
+It runs sooner between those times when memory reaches the suggest line (80%) or macOS reports memory pressure (apps only, at most hourly), or when the disk is on course to fill within 3 days (build folders only, at most hourly). Afterwards one notification says what it did ("Freed 2.9 GB of memory and 1.4 GB of disk") with **Undo**, which reopens the apps and puts the folders back, and **Review**, which opens the Activity Log. A run that finds nothing stays quiet. Nothing runs while notifications are paused from the menu bar.
+
+How it learns: an automatic quit isn't your answer, so it doesn't teach the model "deadweight" (otherwise the model would grow more sure of its own guesses). Reopening an app within 30 minutes of an automatic quit, or tapping Undo, counts as **keep**, so a wrong quit makes the next one less likely.
+
+Good to know: without Accessibility access RamClean can't see unsaved changes; the app's own "Save changes?" prompt is then the backstop, and the app stays open. Projects in Desktop, Documents or Downloads are only searched once you've opened the Disk list yourself, since that may raise a macOS permission prompt. Undo works until RamClean restarts; after that, folders are still in the Trash (Put Back in Finder).
+
 **Overview window.** Shows memory, CPU and disk use, and every Dock app with its memory, its CPU (averaged over the last few checks) and RamClean's verdict:
 
 - **Deadweight NN%** (orange). RamClean thinks you could quit it.
@@ -117,7 +127,7 @@ Menu bar apps, command-line tools and background processes are listed in a colla
 **Model.** Shows the model's training state, how many answers it has, its accuracy on held-out answers, how much of the score it controls, and your recent answers. Buttons: **Retrain now** and **Reset model…**.
 
 **Settings (⌘,)**
-- **General:** notifications on/off, test notification, check interval, Force Quit delay.
+- **General:** open at login, notifications on/off, test notification, **Clean up automatically** and how often, check interval, Force Quit delay.
 - **Thresholds:** when to suggest apps (memory trigger, minimum app size, CPU hog level, deadweight score, cooldowns), threshold alerts (memory, CPU and how long, disk, reminder interval), and what counts as unused (not opened for N days) versus active work (touched within N days).
 - **Protection:** recent-use window, busy work tools and their CPU level, menu bar utilities, always-keep list, and the editable list of work tools (bundle IDs; `com.jetbrains.*` matches a prefix).
 - **Data:** where data lives, Show in Finder, clear habit history, reset preferences.

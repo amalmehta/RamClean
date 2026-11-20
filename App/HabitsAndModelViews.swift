@@ -93,6 +93,8 @@ struct ActivityView: View {
         case .thresholdAlert: return "Alert:"
         case .forgotten: return "Reset what it learned about"
         case .putBack: return "Put back from the Trash:"
+        case .autoQuit: return "Cleaned up automatically: quit"
+        case .autoReopened: return "You reopened"
         }
     }
     private func symbol(_ k: HabitEventKind) -> String {
@@ -114,13 +116,15 @@ struct ActivityView: View {
         case .thresholdAlert: return "exclamationmark.triangle"
         case .forgotten: return "arrow.counterclockwise"
         case .putBack: return "arrow.uturn.backward.circle"
+        case .autoQuit: return "wand.and.sparkles"
+        case .autoReopened: return "arrow.uturn.backward"
         }
     }
     private func color(_ k: HabitEventKind) -> Color {
         switch k {
-        case .quitBySuggestion, .forceQuit, .suggested: return .orange
+        case .quitBySuggestion, .forceQuit, .suggested, .autoQuit: return .orange
         case .kept, .alwaysKept: return .green
-        case .regretRelaunch, .diskWarning, .thresholdAlert: return .red
+        case .regretRelaunch, .autoReopened, .diskWarning, .thresholdAlert: return .red
         default: return .secondary
         }
     }

@@ -380,6 +380,12 @@ Asked and answered (2026-10-07):
 - (2026-10-08) Clicking a bar gives recommendations. Memory and CPU: a ranked quit list with reasons. Disk: rebuildable caches, large files in home, and the Trash, with Move to Trash (confirmed, recoverable) and Show in Finder. Nothing is ever deleted permanently.
 - Model: Apple Create ML classifier (boosted trees), trained on this Mac.
 - GitHub: local git only at first; (2026-10-08) pushed to a private repo, github.com/amalmehta/RamClean.
+- (2026-11-20) Automatic clean: quits idle deadweight apps (deadweight verdict, out of front 2 h,
+  no unsaved changes, ≥ 400 MB) and moves old projects' build folders (untouched 30 days, the
+  "Select All Safe" ones) to the Trash. Every 6 h (6/8/12 in Settings), plus early when memory
+  is tight (≥ 80% or pressure elevated) or the disk is forecast full within 3 days, each at most
+  hourly. One notification with Undo and Review. Off by default, one switch in Settings → General.
+  Trade-off accepted: freed memory vs. losing your place in an app when a quit is wrong.
 
 Decided without asking:
 - Menu bar item + regular Dock app (so ⌘, and the window behave normally), macOS 14+.
@@ -435,3 +441,4 @@ CHANGELOG:
 - 2026-10-08 — added an app icon (RAM stick with sparkles), drawn by scripts/make-icon.swift
 - 2026-10-07 — built the Mac app: process sampling, habit log, protections, Create ML model, notifications, settings, feedback, docs, tests
 - 2026-11-09 — updated the meta-instructions to the current meta doc
+- 2026-11-20 — Clean up automatically (opt-in): every 6 h, or sooner when memory is tight or the disk is forecast to fill, quits idle deadweight apps and trashes old projects' build folders, then sends one notice with Undo; automatic quits never train the model except as "keep" when you reopen

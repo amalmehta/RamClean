@@ -31,3 +31,7 @@ flowchart LR
 - [Go-live checklist](docs/GO-LIVE.md): for a paid Pro version later (Developer ID, notarization, Lemon Squeezy and Sparkle); RamClean itself is free (`ProductConfig.isFree`)
 - [Product website](site/index.html)
 - [Project brief](RamClean.md)
+
+## How it was built
+
+How this was built and how it works, with diagrams: [docs/HOW-IT-WAS-BUILT.md](docs/HOW-IT-WAS-BUILT.md)

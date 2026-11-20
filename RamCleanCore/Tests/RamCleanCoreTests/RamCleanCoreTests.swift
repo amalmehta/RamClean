@@ -464,6 +464,43 @@ final class RecommendationTests: XCTestCase {
         XCTAssertNotNil(sc.scan().items.first { $0.name == "old-docs-site › node_modules" })
     }
 
+    /// The disk half of an automatic clean, end to end on a sample home folder: scan, pick,
+    /// move to the Trash's stand-in, and leave active work, caches and big files alone.
+    func testAutoCleanTrashesOnlyOldProjectsBuildFolders() throws {
+        try write("Code/old-site/package.json", mb: 0)
+        try write("Code/old-site/node_modules/react/index.js", mb: 3)
+        for f in ["Code/old-site/package.json", "Code/old-site/node_modules/react/index.js", "Code/old-site/node_modules/react",
+                  "Code/old-site/node_modules"] { try age(f, days: 60) }
+        try write("Code/old-game/Cargo.toml", mb: 0)
+        try write("Code/old-game/target/debug/game", mb: 4)
+        for f in ["Code/old-game/Cargo.toml", "Code/old-game/target/debug/game", "Code/old-game/target/debug",
+                  "Code/old-game/target"] { try age(f, days: 45) }
+        try write("Code/live-app/Cargo.toml", mb: 0)                       // worked on today
+        try write("Code/live-app/target/debug/app", mb: 3)
+        try age("Code/live-app/target/debug/app", days: 60); try age("Code/live-app/target", days: 60)
+        try write("Library/Developer/Xcode/DerivedData/App-abc/Build/big.o", mb: 6) // a cache: not auto-cleaned
+        try write("Movies/holiday.mov", mb: 5); try age("Movies/holiday.mov", days: 200) // a large file: never
+
+        let report = scanner().scan()
+        var prefs = Preferences(); prefs.autoCleanEnabled = true
+        let picked = AutoCleanPolicy(prefs: prefs).foldersToTrash(report, now: Date())
+        XCTAssertEqual(Set(picked.map(\.name)), ["old-site › node_modules", "old-game › target"])
+
+        // Moving them (the app uses the Trash; a folder stands in for it here) leaves the projects themselves.
+        let bin = home.appendingPathComponent("FakeTrash")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        for (i, item) in picked.enumerated() {
+            try FileManager.default.moveItem(atPath: item.path, toPath: bin.appendingPathComponent("\(i)").path)
+        }
+        let fm = FileManager.default
+        XCTAssertTrue(fm.fileExists(atPath: home.appendingPathComponent("Code/old-site/package.json").path))
+        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent("Code/old-site/node_modules").path))
+        XCTAssertTrue(fm.fileExists(atPath: home.appendingPathComponent("Code/live-app/target/debug/app").path))
+        XCTAssertTrue(fm.fileExists(atPath: home.appendingPathComponent("Movies/holiday.mov").path))
+        // The next run finds nothing more to do.
+        XCTAssertTrue(AutoCleanPolicy(prefs: prefs).foldersToTrash(scanner().scan(), now: Date()).isEmpty)
+    }
+
     func testBulkSizingMatchesFtsAndSizeCacheReuse() throws {
         for i in 0..<5 { try write("tree/a\(i)/b/c/file\(i).bin", mb: 1) }
         try write("tree/top.bin", mb: 2)

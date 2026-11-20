@@ -45,6 +45,17 @@ private struct GeneralSettings: View {
             Toggle("Send notifications suggesting apps to quit", isOn: $model.prefs.notificationsEnabled)
             Toggle("Send a summary of last week on Monday mornings", isOn: $model.prefs.weeklySummaryEnabled)
             Button("Send a test notification") { model.notifier.sendTest() }
+            Toggle("Clean up automatically", isOn: $model.prefs.autoCleanEnabled)
+            if model.prefs.autoCleanEnabled {
+                Picker("Every", selection: $model.prefs.autoCleanHours) {
+                    ForEach([6.0, 8, 12], id: \.self) { Text("\(Int($0)) hours").tag($0) }
+                }
+                if let last = [model.autoCleanClock.lastScheduled, model.autoCleanClock.lastApps, model.autoCleanClock.lastDisk].compactMap({ $0 }).max() {
+                    LabeledContent("Last clean") { Text(last, format: .relative(presentation: .named)) }
+                }
+            }
+            Text("Quits apps marked deadweight that you haven't used for \(Format.duration(minutes: model.prefs.autoCleanIdleMinutes)) and that have no unsaved changes, and moves build folders of projects untouched for \(Int(model.prefs.activeDays)) days to the Trash. It runs sooner when memory gets tight or the disk is on course to fill within 3 days. One notification says what it did, with Undo.")
+                .font(.caption).foregroundStyle(.secondary)
             Picker("Check every", selection: $model.prefs.checkInterval) {
                 ForEach([5.0, 10, 15, 30, 60, 120], id: \.self) { Text("\(Int($0)) seconds").tag($0) }
             }

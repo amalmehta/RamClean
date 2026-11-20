@@ -41,6 +41,10 @@ public enum HabitEventKind: String, Codable, Sendable {
     case forgotten
     /// Undo after Move to Trash: the item went back where it was, so its space wasn't freed after all.
     case putBack
+    /// Quit by an automatic clean. Not an answer of yours, so it doesn't count as one.
+    case autoQuit
+    /// Reopened soon after an automatic clean quit it: counts as a "keep".
+    case autoReopened
 }
 
 public struct HabitEvent: Codable, Equatable, Sendable, Identifiable {
@@ -135,6 +139,9 @@ public final class HabitStore {
         case .quitBySuggestion:
             habits[key]!.timesQuitBySuggestion += 1
             answers.append(.quit)
+        case .autoReopened:
+            habits[key]!.regrets += 1
+            answers.append(.kept)
         case .regretRelaunch:
             habits[key]!.regrets += 1
             // Reopening it soon after turns that quit into a keep, as it does for the model.

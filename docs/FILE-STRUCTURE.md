@@ -45,6 +45,7 @@ RamClean/
 │   │   ├── KillLedger.swift      Follows apps RamClean quit for 30 minutes to learn whether you wanted them back
 │   │   ├── Forecast.swift        Disk-full forecast and apps whose memory has swollen
 │   │   ├── Alerts.swift          Threshold alerts (memory, CPU, disk) and the recommendations they carry
+│   │   ├── AutoClean.swift       Automatic clean: when it's due, which apps and build folders it may touch, its notice
 │   │   ├── WeeklySummary.swift   A week of the habit log added up, and when the Monday summary is due
 │   │   └── Licensing/
 │   │       ├── ProductConfig.swift   Price, trial, grace, checkout, appcast, store IDs: the one place to change them
@@ -54,6 +55,7 @@ RamClean/
 │   └── Tests/RamCleanCoreTests/
 │       ├── RamCleanCoreTests.swift
 │       ├── LicensingTests.swift  Licensing against a fake HTTP client
+│       ├── AutoCleanTests.swift  Automatic clean: schedule, early triggers, what it touches, learning
 │       ├── WeeklySummaryTests.swift This Week's sums against Fixtures/week-events.jsonl
 │       ├── SampleBenchmark.swift Opt-in timing of a live check (RAMCLEAN_BENCH=1)
 │       └── ScanBenchmark.swift   Opt-in timing of a real disk scan (RAMCLEAN_BENCH=1)

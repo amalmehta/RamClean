@@ -17,6 +17,7 @@ flowchart LR
     A --> T{Memory ≥ 85% · CPU ≥ 97% for 2 min · Disk ≥ 99%}
     T -- crossed --> R[Alert with what to quit, clear or move<br/>+ one-tap fix]
     L --> D
+    D -- "optional, every 6 h (sooner if memory is tight<br/>or the disk will fill in 3 days)" --> AC[Clean up automatically:<br/>quit idle deadweight apps,<br/>trash old projects' build folders<br/>→ one notice with Undo]
 ```
 
 | Learns from your answers | Everything in one Settings window (⌘,) |
@@ -31,3 +32,4 @@ flowchart LR
 - [Go-live checklist](docs/GO-LIVE.md): for a paid Pro version later (Developer ID, notarization, Lemon Squeezy and Sparkle); RamClean itself is free (`ProductConfig.isFree`)
 - [Product website](site/index.html)
 - [Project brief](RamClean.md)
+- [Prompt log](docs/PROMPTS.md)

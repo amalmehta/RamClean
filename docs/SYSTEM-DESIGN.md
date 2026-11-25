@@ -141,7 +141,7 @@ Expired copies keep sampling, scoring, recommending and alerting. Quitting and r
 
 - `~/Library/Application Support/RamClean/`: `habits.json`, `events.jsonl`, `training.jsonl`, `meta.json`, `feedback.jsonl`. See [INSTRUCTIONS.md](INSTRUCTIONS.md#where-your-data-lives).
 - `UserDefaults` key `RamCleanPreferences`: the whole `Preferences` struct as JSON. Decoding fills in defaults for missing keys, so a new setting never wipes the old ones.
-- Trial clock and licence: Keychain items under service `com.amalmehta.RamClean.licence` (`trialStart`, `lastSeen`, `licence`), mirrored in `UserDefaults` keys `RamCleanLicensing.*`.
+- Trial clock and licence: Keychain items under service `com.amalmehta.RamClean.licence` (`trialStart`, `lastSeen`, `licence`), mirrored in `UserDefaults` keys `RamCleanLicensing.*`. While `ProductConfig.isFree` is on, only the `UserDefaults` copy is used: nothing to protect, and no Keychain prompts.
 - The trained model lives only in memory. It's rebuilt from `training.jsonl` at launch, which takes about a second.
 
 ## Key decisions and trade-offs
@@ -215,5 +215,5 @@ Expired copies keep sampling, scoring, recommending and alerting. Quitting and r
 - The automatic clean only runs while RamClean is open (turn on Open at login). Its Undo is held in memory, so after a RamClean restart folders have to be put back from the Trash in Finder. Without Accessibility it can't see unsaved changes, so an app may be left showing its own save prompt.
 - Feedback is saved locally only; there's no place to send it yet.
 - The licence check runs in the app, so a patched copy can skip it. That's normal for a $15 one-time app; there's no server-side unlock to protect.
-- Ad-hoc local builds look like a new app to the Keychain after each rebuild, so macOS may ask to let RamClean read its trial and licence items. Developer ID builds don't ask.
+- Ad-hoc local builds look like a new app to the Keychain after each rebuild, so with the licence on (`isFree` off) macOS may ask to let RamClean read its trial and licence items, and **Always Allow** only trusts that one build. Developer ID builds don't ask. While RamClean is free it doesn't read the Keychain, so nothing asks.
 - After the trial, notifications still suggest apps to quit; tapping Quit then explains the licence instead of quitting.

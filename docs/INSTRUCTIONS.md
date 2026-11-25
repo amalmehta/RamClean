@@ -152,4 +152,4 @@ Everything stays in `~/Library/Application Support/RamClean/`. The only things s
 | `sizes.json` | Remembered folder sizes, so refreshes (even after a relaunch) only re-measure what changed |
 | `feedback.jsonl` | Feedback you've written |
 
-Preferences live in `UserDefaults` (domain `com.amalmehta.RamClean`). The trial start and licence are in the Keychain (service `com.amalmehta.RamClean.licence`), with a copy in the same `UserDefaults` domain.
+Preferences live in `UserDefaults` (domain `com.amalmehta.RamClean`). The trial start and licence are in the Keychain (service `com.amalmehta.RamClean.licence`), with a copy in the same `UserDefaults` domain. While RamClean is free (`ProductConfig.isFree`) only the `UserDefaults` copy is used and the Keychain isn't touched.

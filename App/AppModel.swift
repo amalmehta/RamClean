@@ -127,8 +127,13 @@ final class AppModel: ObservableObject {
         model = DeadweightModel(directory: dataDirectory)
         kills = KillLedger(directory: dataDirectory)
         // Two copies of the trial clock and licence, so deleting preferences doesn't reset the trial.
-        licensing = Licensing(config: .ramClean,
-                              stores: [KeychainStore(service: "com.amalmehta.RamClean.licence"), DefaultsStore()],
+        // While RamClean is free there's no trial or licence to protect, so the keychain is left alone:
+        // reading it made macOS ask for the login password whenever the app's signature changed
+        // (every ad-hoc signed rebuild, and "Always Allow" only trusts the copy you clicked it for).
+        let config = ProductConfig.ramClean
+        licensing = Licensing(config: config,
+                              stores: config.isFree ? [DefaultsStore()]
+                                  : [KeychainStore(service: "com.amalmehta.RamClean.licence"), DefaultsStore()],
                               http: URLSessionHTTPClient(),
                               instanceName: SCDynamicStoreCopyComputerName(nil, nil) as String? ?? "Mac")
         prefs = Self.loadPrefs()

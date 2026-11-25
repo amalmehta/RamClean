@@ -140,6 +140,7 @@ struct ActivityView: View {
         case .putBack: return "Put back from the Trash:"
         case .autoQuit: return "Cleaned up automatically: quit"
         case .autoReopened: return "You reopened"
+        case .autoTrashed: return "Moved to Trash automatically:"
         }
     }
     private func symbol(_ k: HabitEventKind) -> String {
@@ -163,6 +164,7 @@ struct ActivityView: View {
         case .putBack: return "arrow.uturn.backward.circle"
         case .autoQuit: return "wand.and.sparkles"
         case .autoReopened: return "arrow.uturn.backward"
+        case .autoTrashed: return "wand.and.sparkles"
         }
     }
     private func color(_ k: HabitEventKind) -> Color {

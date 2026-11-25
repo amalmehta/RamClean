@@ -185,5 +185,13 @@ final class WeeklySummaryTests: XCTestCase {
         let lone = WeeklySummary.make(events: [e(.putBack, gib, "2026-10-13T10:00:00Z")], interval: week)
         XCTAssertEqual(lone.diskItems, 0)
         XCTAssertEqual(lone.diskReclaimed, 0)
+        // A folder the automatic clean moved counts as freed space too, and its Undo takes it off again.
+        let auto = WeeklySummary.make(events: [e(.autoTrashed, 2 * gib, "2026-10-14T09:00:00Z"), e(.movedToTrash, gib, "2026-10-14T10:00:00Z")],
+                                      interval: week)
+        XCTAssertEqual(auto.diskItems, 2)
+        XCTAssertEqual(auto.diskReclaimed, 3 * gib)
+        let undone = WeeklySummary.make(events: [e(.autoTrashed, 2 * gib, "2026-10-14T09:00:00Z"), e(.putBack, 2 * gib, "2026-10-14T09:05:00Z")],
+                                        interval: week)
+        XCTAssertEqual(undone.diskReclaimed, 0)
     }
 }

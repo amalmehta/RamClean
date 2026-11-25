@@ -45,6 +45,9 @@ public enum HabitEventKind: String, Codable, Sendable {
     case autoQuit
     /// Reopened soon after an automatic clean quit it: counts as a "keep".
     case autoReopened
+    /// Moved to the Trash by an automatic clean rather than by you. Counts as freed space like
+    /// `movedToTrash`; logged apart so the Activity Log can say who did it.
+    case autoTrashed
 }
 
 public struct HabitEvent: Codable, Equatable, Sendable, Identifiable {

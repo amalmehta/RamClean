@@ -726,7 +726,7 @@ final class AppModel: ObservableObject {
             scanWaiters.append { report in
                 let folders = policy.foldersToTrash(report, now: Date())
                 guard !folders.isEmpty else { return finish([]) }
-                self.trash(folders) { moved, _ in finish(moved) }
+                self.trash(folders, automatic: true) { moved, _ in finish(moved) }
             }
             scanDisk(byUser: false)
         }
@@ -874,7 +874,9 @@ final class AppModel: ObservableObject {
     }
 
     /// The work behind Move to Trash; calls back with what went (and where) and what failed.
-    private func trash(_ items: [DiskItem], done: @escaping (_ moved: [(item: DiskItem, inTrash: URL)], _ failures: [String]) -> Void) {
+    /// `automatic`: an automatic clean's move, logged as such so the Activity Log says who did it.
+    private func trash(_ items: [DiskItem], automatic: Bool = false,
+                       done: @escaping (_ moved: [(item: DiskItem, inTrash: URL)], _ failures: [String]) -> Void) {
         let items = items.filter { $0.canTrash && !trashingPaths.contains($0.path) }
         guard !items.isEmpty, allowed("Moving files to the Trash") else { done([], []); return }
         trashingPaths.formUnion(items.map(\.path))
@@ -894,7 +896,7 @@ final class AppModel: ObservableObject {
                 if !moved.isEmpty {
                     let bytes = moved.reduce(Int64(0)) { $0 + max(0, $1.item.bytes ?? 0) }
                     for m in moved {
-                        self.habitStore.log(.movedToTrash, key: "disk", name: m.item.name,
+                        self.habitStore.log(automatic ? .autoTrashed : .movedToTrash, key: "disk", name: m.item.name,
                                             detail: "\(Format.bytes(UInt64(max(0, m.item.bytes ?? 0)))) · \(m.item.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))",
                                             bytes: UInt64(max(0, m.item.bytes ?? 0)), at: Date())
                     }

@@ -71,7 +71,7 @@ public struct WeeklySummary: Equatable, Sendable {
                 }
             case .kept, .alwaysKept: s.dismissed += 1
             case .regretRelaunch, .autoReopened: s.reopened += 1
-            case .movedToTrash, .cleanedUp, .movedOffMac:
+            case .movedToTrash, .autoTrashed, .cleanedUp, .movedOffMac:
                 s.diskItems += 1
                 s.diskReclaimed += e.bytes ?? 0
             case .putBack:

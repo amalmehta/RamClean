@@ -44,6 +44,7 @@ struct ActivityView: View {
     @EnvironmentObject var model: AppModel
     /// Opening, closing and switching apps are most of the log; RamClean's own actions are what you come here for.
     @AppStorage("showRoutineActivity") private var showRoutine = false
+    @State private var undoProblem: String?
     private static let routine: Set<HabitEventKind> = [.activated, .launched, .terminated]
 
     var body: some View {
@@ -62,14 +63,58 @@ struct ActivityView: View {
             if model.events.isEmpty { ContentUnavailableView("No activity yet", systemImage: "list.bullet.rectangle", description: Text("Launches, quits, suggestions and your answers appear here.")) }
         }
         .safeAreaInset(edge: .top) {
-            HStack {
-                Toggle("Show apps opening, closing and switching", isOn: $showRoutine).toggleStyle(.checkbox)
-                Spacer()
+            VStack(spacing: 0) {
+                if let clean = model.lastAutoClean { autoCleanBar(clean) }
+                HStack {
+                    Toggle("Show apps opening, closing and switching", isOn: $showRoutine).toggleStyle(.checkbox)
+                    Spacer()
+                }
+                .font(.callout)
+                .padding(.horizontal, 16).padding(.vertical, 8)
             }
-            .font(.callout)
-            .padding(.horizontal, 16).padding(.vertical, 8)
             .background(.bar)
         }
+        .alert("Couldn't put everything back", isPresented: Binding(get: { undoProblem != nil }, set: { if !$0 { undoProblem = nil } })) {
+            Button("OK") { undoProblem = nil }
+        } message: {
+            Text(undoProblem ?? "")
+        }
+    }
+
+    /// The last automatic clean, with Undo. It lives here as well as on the clean's notification,
+    /// because macOS doesn't always hand a notification button press back to the app.
+    private func autoCleanBar(_ clean: AutoCleanUndo) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "sparkles").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text("Automatic clean:").fontWeight(.medium)
+                    Text(clean.title)
+                    Text("·").foregroundStyle(.secondary)
+                    // Redrawn each minute, so "2 minutes ago" doesn't stay "now".
+                    TimelineView(.periodic(from: .now, by: 60)) { _ in
+                        Text(clean.date, format: .relative(presentation: .named)).foregroundStyle(.secondary)
+                    }
+                }
+                Text(clean.body).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("Dismiss") { model.dismissAutoCleanUndo() }.controlSize(.small)
+                .help("Hide this. Everything stays as the clean left it.")
+            Button("Undo") { undoProblem = model.undoAutoClean() }.controlSize(.small)
+                .help(undoHelp(clean))
+        }
+        .font(.callout)
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.08))
+    }
+
+    private func undoHelp(_ clean: AutoCleanUndo) -> String {
+        var parts: [String] = []
+        if !clean.trashed.isEmpty { parts.append("put the folders back where they were") }
+        if !clean.apps.isEmpty { parts.append("reopen the apps") }
+        let text = parts.joined(separator: " and ")
+        return text.prefix(1).uppercased() + text.dropFirst()
     }
 
     private func title(_ k: HabitEventKind) -> String {

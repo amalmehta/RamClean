@@ -29,8 +29,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var isTraining = false
     /// When automatic cleans last ran (each half separately). Saved in UserDefaults.
     @Published private(set) var autoCleanClock: AutoCleanClock = AppModel.loadAutoCleanClock()
-    /// The last automatic clean, for its notification's Undo: folders it trashed and apps it quit.
-    private var lastAutoClean: (trashed: [(item: DiskItem, inTrash: URL)], apps: [String])?
+    /// The last automatic clean, for Undo (in the Activity Log, and on its notification): what it
+    /// said, the folders it trashed and the apps it quit. Kept until Undo, Dismiss, the next
+    /// automatic clean or a RamClean restart.
+    @Published private(set) var lastAutoClean: AutoCleanUndo?
     private var autoCleaning = false
     /// Each automatically quit app's features at the moment it was quit, so reopening it soon
     /// after can teach the model "keep". In memory only: a RamClean restart forgets them.
@@ -360,7 +362,9 @@ final class AppModel: ObservableObject {
         case .forceQuit: forceQuit(key: key)
         case .relaunch: relaunch(key: key)
         case .alertFix: applyAlertFix(info)
-        case .autoCleanUndo: undoAutoClean()
+        case .autoCleanUndo:
+            let hadClean = lastAutoClean != nil
+            if let problem = undoAutoClean() { notifier.problem(hadClean ? "Couldn't put everything back" : "Nothing to undo", problem) }
         case .autoCleanReview:
             openMainWindow?()
             NSApp.activate(ignoringOtherApps: true)
@@ -708,7 +712,8 @@ final class AppModel: ObservableObject {
                 self.autoCleaning = false
                 guard let text = AutoCleanSummary.text(quit: quit.map { ($0.name, $0.bytes) }, trashed: trashed.map(\.item),
                                                        trigger: plan.trigger) else { return }
-                self.lastAutoClean = (trashed, quit.map(\.key))
+                self.lastAutoClean = AutoCleanUndo(date: now, title: text.title, body: text.body,
+                                                   trashed: trashed, apps: quit.map(\.key))
                 self.notifier.autoCleaned(text)
             }
             guard plan.clearBuildFolders else { return finish([]) }
@@ -767,19 +772,24 @@ final class AppModel: ObservableObject {
         refreshEvents()
     }
 
-    /// The notification's Undo: puts the trashed folders back and reopens the apps. Reopening
-    /// counts as "keep", so the model learns from the mistake.
-    private func undoAutoClean() {
+    /// Undo for the last automatic clean: puts the trashed folders back and reopens the apps.
+    /// Reopening counts as "keep", so the model learns from the mistake. Returns a message naming
+    /// what couldn't go back, or nil. The Activity Log's Undo calls this directly, so it works even
+    /// when macOS doesn't pass a notification button press on to RamClean.
+    @discardableResult
+    func undoAutoClean() -> String? {
         guard let last = lastAutoClean else {
-            notifier.problem("Nothing to undo", "RamClean restarted since that clean. Folders it moved are still in the Trash (Put Back in Finder), and apps open as usual.")
-            return
+            return "RamClean restarted since that clean, so it no longer knows what it moved. Folders it moved are still in the Trash (Put Back in Finder), and apps open as usual."
         }
         lastAutoClean = nil
         if let lt = lastTrashed, Set(lt.items.map(\.item.path)) == Set(last.trashed.map(\.item.path)) { lastTrashed = nil }
         let failures = putBack(last.trashed)
         last.apps.forEach(relaunch)
-        if !failures.isEmpty { notifier.problem("Couldn't put everything back", failures.joined(separator: "\n")) }
+        return failures.isEmpty ? nil : failures.joined(separator: "\n")
     }
+
+    /// Hides the Activity Log's Undo for the last automatic clean, leaving everything as it is.
+    func dismissAutoCleanUndo() { lastAutoClean = nil }
 
     private static func loadAutoCleanClock() -> AutoCleanClock {
         guard let data = UserDefaults.standard.data(forKey: autoCleanClockKey),
@@ -901,6 +911,10 @@ final class AppModel: ObservableObject {
         guard let last = lastTrashed else { done(nil); return }
         lastTrashed = nil
         let failures = putBack(last.items)
+        // If that batch was an automatic clean's, its folders are back now; keep only its app half.
+        if let auto = lastAutoClean, Set(auto.trashed.map(\.item.path)).isSubset(of: Set(last.items.map(\.item.path))) {
+            lastAutoClean = auto.apps.isEmpty ? nil : AutoCleanUndo(date: auto.date, title: auto.title, body: auto.body, trashed: [], apps: auto.apps)
+        }
         done(failures.isEmpty ? nil : failures.joined(separator: "\n"))
     }
 
@@ -1188,4 +1202,15 @@ enum Format {
         ByteCountFormatter.string(fromByteCount: Int64(b), countStyle: .memory)
     }
     static func duration(minutes m: Double) -> String { HumanFormat.duration(minutes: m) }
+}
+
+/// What the last automatic clean did, so it can be undone from the Activity Log.
+struct AutoCleanUndo {
+    var date: Date
+    /// The notification's text, e.g. "Freed 2.9 GB of memory" / "Quit Xcode (idle, marked deadweight); …".
+    var title: String
+    var body: String
+    var trashed: [(item: DiskItem, inTrash: URL)]
+    /// Habit keys of the apps it quit, reopened on Undo.
+    var apps: [String]
 }

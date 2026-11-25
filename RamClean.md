@@ -543,6 +543,9 @@ Asked and answered (2026-10-07):
   "Select All Safe" ones) to the Trash. Every 6 h (6/8/12 in Settings), plus early when memory
   is tight (≥ 80% or pressure elevated) or the disk is forecast full within 3 days, each at most
   hourly. One notification with Undo and Review. Off by default, one switch in Settings → General.
+- (2026-11-24) Undo for the automatic clean also lives in a bar at the top of the Activity Log
+  (Undo / Dismiss), because on the owner's Mac macOS never delivered the notification's Undo
+  press to RamClean.
   Trade-off accepted: freed memory vs. losing your place in an app when a quit is wrong.
 
 Decided without asking:
@@ -601,3 +604,4 @@ CHANGELOG:
 - 2026-11-09 — updated the meta-instructions to the current meta doc
 - 2026-11-20 — Clean up automatically (opt-in): every 6 h, or sooner when memory is tight or the disk is forecast to fill, quits idle deadweight apps and trashes old projects' build folders, then sends one notice with Undo; automatic quits never train the model except as "keep" when you reopen
 - 2026-11-20 — updated the meta-instructions to the current meta doc
+- 2026-11-24 — Undo for the automatic clean in the Activity Log too (notification button presses weren't reaching the app); "Last clean" in Settings now updates while open

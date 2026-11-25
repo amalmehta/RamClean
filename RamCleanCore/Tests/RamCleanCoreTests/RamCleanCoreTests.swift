@@ -501,6 +501,51 @@ final class RecommendationTests: XCTestCase {
         XCTAssertTrue(AutoCleanPolicy(prefs: prefs).foldersToTrash(scanner().scan(), now: Date()).isEmpty)
     }
 
+    /// A package inside another git checkout with no git of its own (Emscripten's SDK keeps one at
+    /// ~/emsdk/upstream/emscripten) is part of a tool, not an old project: listed with a caution,
+    /// never ticked by Select All Safe or trashed by the automatic clean.
+    func testPackagesInsideAnotherCheckoutAreNeverCleanedAutomatically() throws {
+        func old(_ files: [String], days: Double = 45) throws { for f in files { try age(f, days: days) } }
+        // The SDK: a git checkout that installed a package with its own node_modules.
+        try write("emsdk/.git/HEAD", mb: 0)
+        try write("emsdk/upstream/emscripten/package.json", mb: 0)
+        try write("emsdk/upstream/emscripten/node_modules/acorn/index.js", mb: 3)
+        try old(["emsdk/.git/HEAD", "emsdk/upstream/emscripten/package.json", "emsdk/upstream/emscripten/node_modules/acorn/index.js",
+                 "emsdk/upstream/emscripten/node_modules/acorn", "emsdk/upstream/emscripten/node_modules"])
+        // A Rust crate vendored inside another repo, with a build folder: same caution.
+        try write("tools/.git/HEAD", mb: 0)
+        try write("tools/vendor/crate/Cargo.toml", mb: 0)
+        try write("tools/vendor/crate/target/debug/out", mb: 3)
+        try old(["tools/.git/HEAD", "tools/vendor/crate/Cargo.toml", "tools/vendor/crate/target/debug/out",
+                 "tools/vendor/crate/target/debug", "tools/vendor/crate/target"])
+        // Your own old project with its own git, even inside another checkout (a submodule): no caution.
+        try write("Code/.git/HEAD", mb: 0)
+        try write("Code/old-site/.git/HEAD", mb: 0)
+        try write("Code/old-site/package.json", mb: 0)
+        try write("Code/old-site/node_modules/react/index.js", mb: 3)
+        try old(["Code/.git/HEAD", "Code/old-site/.git/HEAD", "Code/old-site/.git", "Code/old-site/package.json", "Code/old-site/node_modules/react/index.js",
+                 "Code/old-site/node_modules/react", "Code/old-site/node_modules"])
+        // A repo at the home folder itself (dotfiles) doesn't make every project "nested".
+        try write(".git/HEAD", mb: 0)
+        try write("Sites/blog/package.json", mb: 0)
+        try write("Sites/blog/node_modules/marked/index.js", mb: 3)
+        try old(["Sites/blog/package.json", "Sites/blog/node_modules/marked/index.js", "Sites/blog/node_modules/marked", "Sites/blog/node_modules"])
+
+        let report = scanner().scan()
+        func item(_ name: String) -> DiskItem? { report.items.first { $0.name == name } }
+        let sdk = try XCTUnwrap(item("emscripten › node_modules"), "still listed")
+        XCTAssertTrue(sdk.caution?.contains("Part of ~/emsdk") ?? false, sdk.caution ?? "no caution")
+        XCTAssertTrue(sdk.canTrash, "you can still move it yourself")
+        XCTAssertTrue(item("crate › target")?.caution?.contains("Part of ~/tools") ?? false)
+        XCTAssertNil(item("old-site › node_modules")?.caution)
+        XCTAssertNil(item("blog › node_modules")?.caution)
+
+        XCTAssertEqual(Set(report.safeToClear.filter { $0.kind == .buildArtifact }.map(\.name)), ["old-site › node_modules", "blog › node_modules"])
+        var prefs = Preferences(); prefs.autoCleanEnabled = true
+        XCTAssertEqual(Set(AutoCleanPolicy(prefs: prefs).foldersToTrash(report, now: Date()).map(\.name)),
+                       ["old-site › node_modules", "blog › node_modules"])
+    }
+
     func testBulkSizingMatchesFtsAndSizeCacheReuse() throws {
         for i in 0..<5 { try write("tree/a\(i)/b/c/file\(i).bin", mb: 1) }
         try write("tree/top.bin", mb: 2)

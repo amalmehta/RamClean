@@ -604,4 +604,5 @@ CHANGELOG:
 - 2026-11-09 — updated the meta-instructions to the current meta doc
 - 2026-11-20 — Clean up automatically (opt-in): every 6 h, or sooner when memory is tight or the disk is forecast to fill, quits idle deadweight apps and trashes old projects' build folders, then sends one notice with Undo; automatic quits never train the model except as "keep" when you reopen
 - 2026-11-20 — updated the meta-instructions to the current meta doc
+- 2026-11-24 — build folders inside another git checkout with no git of their own (e.g. Emscripten's SDK in ~/emsdk) get a caution, so Select All Safe and the automatic clean leave them alone
 - 2026-11-24 — Undo for the automatic clean in the Activity Log too (notification button presses weren't reaching the app); "Last clean" in Settings now updates while open

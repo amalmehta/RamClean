@@ -393,7 +393,7 @@ public struct DiskScanner {
             return DiskItem(name: "\(f.dir.deletingLastPathComponent().lastPathComponent) › node_modules", path: f.dir.path, bytes: size,
                             kind: .buildArtifact,
                             reason: "Last changed \(idle). Dependency files; they come back with npm install (or yarn / pnpm install)",
-                            lastModified: f.idle)
+                            caution: nestedCaution(f.dir.deletingLastPathComponent()), lastModified: f.idle)
         }.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }
     }
 
@@ -560,6 +560,30 @@ public struct DiskScanner {
         return (Array(files.sorted { ($0.bytes ?? 0) > ($1.bytes ?? 0) }.prefix(maxLargeFiles)), projects)
     }
 
+    /// The git checkout a package sits inside when it has no git of its own, e.g. ~/emsdk for
+    /// ~/emsdk/upstream/emscripten. Such a folder is part of something bigger, often a tool's own
+    /// install (Emscripten's SDK keeps its node_modules there), not a project you stopped working on,
+    /// so its build folders get a caution: listed, but never ticked by Select All Safe or cleaned
+    /// automatically. A repo at the home folder itself doesn't count (some keep their dotfiles in one).
+    func enclosingRepo(of project: URL) -> String? {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: project.appendingPathComponent(".git").path) { return nil }
+        let homePath = Self.realPath(home.path)
+        var dir = (Self.realPath(project.path) as NSString).deletingLastPathComponent
+        while dir.hasPrefix(homePath + "/") {
+            if fm.fileExists(atPath: dir + "/.git") { return dir }
+            dir = (dir as NSString).deletingLastPathComponent
+        }
+        return nil
+    }
+
+    /// The caution for a package inside another checkout (see `enclosingRepo`).
+    func nestedCaution(_ project: URL) -> String? {
+        guard let repo = enclosingRepo(of: project) else { return nil }
+        let shown = repo.replacingOccurrences(of: Self.realPath(home.path), with: "~")
+        return "Part of \(shown), not a project of its own; it may belong to an installed tool. RamClean never clears it by itself"
+    }
+
     /// The newest change anywhere near the top of a project (its files, and git's index/HEAD).
     func lastActivity(ofProject root: URL) -> Date? {
         let fm = FileManager.default
@@ -597,6 +621,7 @@ public struct DiskScanner {
             guard !builds.isEmpty else { return }
             let activity = lastActivity(ofProject: root)
             if isActive(activity) { return } // live project
+            let caution = nestedCaution(root)
             var found: [(dir: URL, make: (Int64) -> DiskItem)] = []
             for dir in builds {
                 let folder = dir.lastPathComponent, rebuild = Self.artifacts[folder]!
@@ -605,7 +630,7 @@ public struct DiskScanner {
                 let idle = daysSince(activity).map { "\(HumanFormat.duration(minutes: $0 * 1440)) ago" } ?? "a long time ago"
                 found.append((dir, { DiskItem(name: "\(root.lastPathComponent) › \(folder)", path: dir.path, bytes: $0, kind: .buildArtifact,
                                               reason: "Project last changed \(idle). These are build or dependency files; they come back with \(rebuild)",
-                                              lastOpened: activity, lastModified: written) }))
+                                              caution: caution, lastOpened: activity, lastModified: written) }))
             }
             lock.lock(); perProject[i] = found; lock.unlock()
         }

@@ -95,6 +95,13 @@ final class AppModel: ObservableObject {
     private var sampling = false
     private var timer: Timer?
     private var frontmost: (key: String, name: String)?
+    /// When each app was in front lately, so quitting one you weren't using teaches the model.
+    private var foreground = ForegroundLog()
+    /// Each app's most recent assessment, kept after it drops out of `assessments` so a quit
+    /// can be learned from with the numbers it had while running.
+    private var lastAssessed: [String: Assessment] = [:]
+    /// Manual quits learned in the last half hour, flipped to "keep" if the app is reopened.
+    private var recentManualQuits = RecentManualQuits()
     private var lastCredit = Date()
     private var lastNotified: [String: Date] = [:]
     private var lastAnyNotification: Date?
@@ -139,7 +146,10 @@ final class AppModel: ObservableObject {
         notifier.onAction = { [weak self] action, info in self?.handle(action, info: info) }
         notifier.setUp()
         observeWorkspace()
-        if let app = NSWorkspace.shared.frontmostApplication { frontmost = (Self.key(app), Self.name(app)) }
+        if let app = NSWorkspace.shared.frontmostApplication {
+            frontmost = (Self.key(app), Self.name(app))
+            foreground.activated(Self.key(app), at: Date())
+        }
         // The model trained last time is reused when there are no new answers since.
         if model.restoredFromDisk { modelStatus = model.status } else { retrain() }
         tick()
@@ -196,6 +206,7 @@ final class AppModel: ObservableObject {
 
         system = snapshot
         assessments = result
+        for a in result { lastAssessed[a.group.habitKey] = a }
         // A "Quit?" already on screen is wrong once the app gets busy: take it back.
         let busyKeys = result.compactMap { a -> String? in
             guard case .protected(.busy) = a.verdict, lastNotified[a.group.habitKey] != nil else { return nil }
@@ -256,6 +267,7 @@ final class AppModel: ObservableObject {
                 guard let self else { return }
                 self.creditForeground(now: Date())
                 self.frontmost = (Self.key(a), Self.name(a))
+                self.foreground.activated(Self.key(a), at: Date())
                 self.habitStore.markActive(key: Self.key(a), name: Self.name(a), at: Date())
             }
         })
@@ -268,6 +280,8 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 let key = Self.key(a)
+                // Asked before the lines below clear RamClean's own bookkeeping for this quit.
+                self.learnFromManualQuit(a, key: key)
                 if self.pendingRelaunch.remove(key) != nil { self.relaunch(key: key) }
                 let wasQuitting = self.quitting.remove(key) != nil
                 if self.awaitingForceQuit.remove(key) != nil || wasQuitting { self.appExited(key) }
@@ -282,12 +296,45 @@ final class AppModel: ObservableObject {
         })
     }
 
+    /// You quit an app yourself (Cmd-Q, the Dock) that you weren't using and RamClean doesn't
+    /// protect: that's a "deadweight" answer, learned from with its last numbers.
+    private func learnFromManualQuit(_ a: NSRunningApplication, key: String) {
+        let now = Date()
+        defer {
+            foreground.forget(key)
+            lastAssessed[key] = nil
+        }
+        let last = lastAssessed[key]
+        let byRamClean = quitting.contains(key) || awaitingForceQuit.contains(key) || pendingRelaunch.contains(key)
+            || kills.pending.contains { $0.key == key }
+        let alwaysKept = prefs.alwaysKeep.contains(key) || prefs.matches(prefs.alwaysKeep, a.bundleIdentifier)
+        guard ManualQuit.shouldLearn(isRegular: a.activationPolicy == .regular, quitByRamClean: byRamClean,
+                                     alwaysKept: alwaysKept, verdict: last?.verdict,
+                                     wasInUse: foreground.wasInUse(key, at: now)),
+              let features = last?.features,
+              !ManualQuit.learnedToday(key, in: model.examples, now: now),
+              licensing.state().unlocksActions // like a tapped answer, but never asks for a licence
+        else { return }
+        model.add(TrainingExample(date: now, features: features, label: .deadweight, source: ManualQuit.source))
+        recentManualQuits.learned(key, at: now)
+        modelStatus = model.status
+        scheduleRetrain()
+    }
+
+    /// Answers learned from quitting apps yourself, for the Model tab.
+    var manualQuitAnswers: Int { model.count(source: ManualQuit.source) }
+
     private func launched(_ a: NSRunningApplication) {
         guard a.activationPolicy == .regular else { return }
         let key = Self.key(a), name = Self.name(a), now = Date()
         habitStore.recordLaunch(key: key, name: name, at: now)
         notifier.withdraw(["quit-done-\(key)"]) // nothing left to relaunch
         if let hit = kills.noteLaunch(key: key, at: now) { resolve(hit.record, hit.outcome, at: now) }
+        // Reopened soon after you quit it yourself: you wanted it, so that answer becomes "keep".
+        if let quitAt = recentManualQuits.reopened(key, at: now), model.relabelLatest(key: key, since: quitAt, to: .keep) {
+            modelStatus = model.status
+            scheduleRetrain()
+        }
         refreshEvents()
     }
 

@@ -35,7 +35,7 @@ The first build downloads [Sparkle](https://sparkle-project.org) (auto-updates) 
 
 To build the signed, notarized DMG you sell, see `./scripts/release.sh` and [GO-LIVE.md](GO-LIVE.md).
 
-The first time it runs, macOS asks whether RamClean may send notifications. Click **Allow**, or suggestions can only appear in the window and the menu bar. You can change this later in System Settings → Notifications → RamClean.
+The first time it runs, a short **Set up RamClean** sheet offers Open at login (RamClean only learns while it's running), shows whether notifications are on, and offers Accessibility access for spotting unsaved changes. All three are in Settings later. macOS also asks whether RamClean may send notifications. Click **Allow**, or suggestions can only appear in the window and the menu bar. You can change this later in System Settings → Notifications → RamClean.
 
 ## Run the tests
 
@@ -114,7 +114,7 @@ Menu bar apps, command-line tools and background processes are listed in a colla
 
 **Activity Log.** A diary of launches, quits, suggestions and your answers.
 
-**Model.** Shows the model's training state, how many answers it has, its accuracy on held-out answers, how much of the score it controls, and your recent answers. Buttons: **Retrain now** and **Reset model…**.
+**Model.** Shows the model's training state, how many answers it has (and how many came from quitting apps yourself), how much of the score it controls, and your recent answers. Buttons: **Retrain now** and **Reset model…**.
 
 **Settings (⌘,)**
 - **General:** notifications on/off, test notification, check interval, Force Quit delay.

@@ -435,3 +435,5 @@ CHANGELOG:
 - 2026-10-08 — added an app icon (RAM stick with sparkles), drawn by scripts/make-icon.swift
 - 2026-10-07 — built the Mac app: process sampling, habit log, protections, Create ML model, notifications, settings, feedback, docs, tests
 - 2026-11-09 — updated the meta-instructions to the current meta doc
+- 2026-11-25 — quitting an app yourself (Cmd-Q, the Dock) that you haven't had in front for a minute teaches the model "deadweight" (source "manual quit"); the Model tab counts these answers
+- 2026-11-26 — removed the Model tab's held-out accuracy (near-identical answers in training and test made it look better than it was); manual quits count at most once per app a day and flip to "keep" if you reopen the app within 30 minutes; a first-run Set up RamClean sheet for Open at login, notifications and Accessibility

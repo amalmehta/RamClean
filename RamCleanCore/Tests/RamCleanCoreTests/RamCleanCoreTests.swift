@@ -166,7 +166,6 @@ final class HabitAndScoreTests: XCTestCase {
         let status = model.train()
         XCTAssertTrue(status.isTrained, status.message)
         XCTAssertEqual(status.examples, 30)
-        XCTAssertNotNil(status.holdoutAccuracy)
         let pDead = model.probability(f(idle: 500, avg: 1, days: 1, id: "dead1"))!
         let pKeep = model.probability(f(idle: 500, avg: 70, days: 12, id: "keep1"))!
         XCTAssertGreaterThan(pDead, pKeep)

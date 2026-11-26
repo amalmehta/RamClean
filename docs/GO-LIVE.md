@@ -161,6 +161,6 @@ What needs a licence after the trial is decided in `AppModel.allowed(_:)`'s call
 
 ## Things to know
 
-- **Development builds and the Keychain.** The trial clock and licence are kept in the Keychain. `./scripts/build.sh` signs ad hoc, so each rebuild looks like a new app to the Keychain and macOS may ask "RamClean wants to use confidential information". Click **Always Allow**. Released builds, signed with your Developer ID, don't ask.
+- **Development builds and the Keychain.** The trial clock and licence are kept in the Keychain. `./scripts/build.sh` signs ad hoc, so each rebuild looks like a new app to the Keychain and macOS may ask "RamClean wants to use confidential information". Click **Always Allow** (it only trusts that build, so it comes back after the next rebuild). Released builds, signed with your Developer ID, don't ask. While `ProductConfig.isFree` is on, RamClean doesn't use the Keychain at all, so this only starts once the licence is switched back on.
 - **Until step 3 is done, nothing locks.** With a store ID of 0, RamClean shows "Development copy" in Settings → Licence and every feature works, so your own copy never locks you out while you set up.
 - **Your own copy.** Once the IDs are in, your Mac's trial counts from the first launch of a build with licensing in it. Use a test-mode key, or buy a copy.

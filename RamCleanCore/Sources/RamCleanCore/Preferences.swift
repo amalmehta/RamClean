@@ -40,6 +40,13 @@ public struct Preferences: Codable, Equatable, Sendable {
     public var activeDays: Double = 30
     /// Seconds to wait after a polite quit before offering Force Quit.
     public var forceQuitAfterSeconds: Double = 10
+    /// Clean up by itself: quit idle deadweight apps and trash old projects' build folders.
+    /// Off until you turn it on, since it acts without asking.
+    public var autoCleanEnabled = false
+    /// Hours between automatic cleans (tight memory or a disk forecast can bring one forward).
+    public var autoCleanHours: Double = 6
+    /// An app must have been out of front this long before it's quit automatically.
+    public var autoCleanIdleMinutes: Double = 120
     public var alwaysKeep: [String] = []
     /// Bundle IDs treated as work tools. A trailing "*" matches a prefix.
     public var workTools: [String] = Preferences.defaultWorkTools
@@ -88,6 +95,9 @@ public struct Preferences: Codable, Equatable, Sendable {
         staleDays = v(.staleDays, staleDays)
         activeDays = v(.activeDays, activeDays)
         forceQuitAfterSeconds = v(.forceQuitAfterSeconds, forceQuitAfterSeconds)
+        autoCleanEnabled = v(.autoCleanEnabled, autoCleanEnabled)
+        autoCleanHours = v(.autoCleanHours, autoCleanHours)
+        autoCleanIdleMinutes = v(.autoCleanIdleMinutes, autoCleanIdleMinutes)
         alwaysKeep = v(.alwaysKeep, alwaysKeep)
         workTools = v(.workTools, workTools)
     }

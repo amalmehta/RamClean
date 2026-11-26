@@ -27,6 +27,20 @@ final class AppModel: ObservableObject {
     var notificationsPaused: Bool { pausedUntil.map { $0 > Date() } ?? false }
     private static let pausedKey = "RamCleanNotificationsPausedUntil"
     @Published private(set) var isTraining = false
+    /// When automatic cleans last ran (each half separately). Saved in UserDefaults.
+    @Published private(set) var autoCleanClock: AutoCleanClock = AppModel.loadAutoCleanClock()
+    /// The last automatic clean, for Undo (in the Activity Log, and on its notification): what it
+    /// said, the folders it trashed and the apps it quit. Kept until Undo, Dismiss, the next
+    /// automatic clean or a RamClean restart.
+    @Published private(set) var lastAutoClean: AutoCleanUndo?
+    private var autoCleaning = false
+    /// Each automatically quit app's features at the moment it was quit, so reopening it soon
+    /// after can teach the model "keep". In memory only: a RamClean restart forgets them.
+    private var autoQuitFeatures: [String: FeatureVector] = [:]
+    static let autoCleanSource = "auto clean"
+    private static let autoCleanClockKey = "RamCleanAutoCleanClock"
+    /// Called with the report when the disk scan now running (or the next one) finishes.
+    private var scanWaiters: [(DiskReport) -> Void] = []
     @Published private(set) var diskReport: DiskReport? {
         didSet { diskOverview = diskReport?.overview }
     }
@@ -120,8 +134,13 @@ final class AppModel: ObservableObject {
         model = DeadweightModel(directory: dataDirectory)
         kills = KillLedger(directory: dataDirectory)
         // Two copies of the trial clock and licence, so deleting preferences doesn't reset the trial.
-        licensing = Licensing(config: .ramClean,
-                              stores: [KeychainStore(service: "com.amalmehta.RamClean.licence"), DefaultsStore()],
+        // While RamClean is free there's no trial or licence to protect, so the keychain is left alone:
+        // reading it made macOS ask for the login password whenever the app's signature changed
+        // (every ad-hoc signed rebuild, and "Always Allow" only trusts the copy you clicked it for).
+        let config = ProductConfig.ramClean
+        licensing = Licensing(config: config,
+                              stores: config.isFree ? [DefaultsStore()]
+                                  : [KeychainStore(service: "com.amalmehta.RamClean.licence"), DefaultsStore()],
                               http: URLSessionHTTPClient(),
                               instanceName: SCDynamicStoreCopyComputerName(nil, nil) as String? ?? "Mac")
         prefs = Self.loadPrefs()
@@ -235,6 +254,7 @@ final class AppModel: ObservableObject {
             suggest(pick, now: now)
         }
         checkThresholds(snapshot, result, now: now)
+        checkAutoClean(snapshot, result, now: now)
         updateLicence()
     }
 
@@ -287,7 +307,8 @@ final class AppModel: ObservableObject {
                 if self.awaitingForceQuit.remove(key) != nil || wasQuitting { self.appExited(key) }
                 // Its "Quit?" and "didn't quit" notifications are moot now, however it quit.
                 self.notifier.withdraw(["suggest-\(key)", "force-\(key)"])
-                if let r = self.kills.noteTerminated(key: key, at: Date()) { self.announceQuit(r) }
+                // An automatic clean sends one notice for everything it did, not one per app.
+                if let r = self.kills.noteTerminated(key: key, at: Date()), r.source != Self.autoCleanSource { self.announceQuit(r) }
                 if a.activationPolicy == .regular {
                     self.habitStore.log(.terminated, key: key, name: Self.name(a), at: Date())
                     self.refreshEvents()
@@ -341,6 +362,7 @@ final class AppModel: ObservableObject {
     /// A kill's 30-minute window has closed (or you reopened the app sooner): log how it
     /// went, and if you wanted it back, flip that answer to "keep" so the model learns.
     private func resolve(_ r: KillRecord, _ outcome: KillOutcome, at now: Date) {
+        if r.source == Self.autoCleanSource { return resolveAutoQuit(r, outcome, at: now) }
         let minutes = Int(now.timeIntervalSince(r.killedAt) / 60)
         switch outcome {
         case .relaunched:
@@ -392,6 +414,13 @@ final class AppModel: ObservableObject {
         case .forceQuit: forceQuit(key: key)
         case .relaunch: relaunch(key: key)
         case .alertFix: applyAlertFix(info)
+        case .autoCleanUndo:
+            let hadClean = lastAutoClean != nil
+            if let problem = undoAutoClean() { notifier.problem(hadClean ? "Couldn't put everything back" : "Nothing to undo", problem) }
+        case .autoCleanReview:
+            openMainWindow?()
+            NSApp.activate(ignoringOtherApps: true)
+            requestedSection = .activity
         case .alertShow: if let resource { showRecommendations(resource) }
         case .alertSnooze:
             if let resource {
@@ -712,6 +741,114 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: - Automatic clean
+
+    /// Every check: if a clean is due (every `autoCleanHours`, or sooner when memory is tight or
+    /// the disk is on course to fill), quit idle deadweight apps and trash old projects' build
+    /// folders, then send one notification with Undo. Off unless you turned it on; held while
+    /// notifications are paused, since that's when you're presenting or on a call.
+    private func checkAutoClean(_ s: SystemSnapshot, _ list: [Assessment], now: Date) {
+        let policy = AutoCleanPolicy(prefs: prefs)
+        guard !autoCleaning, licensing.state().unlocksActions,
+              let plan = policy.due(clock: autoCleanClock, system: s, diskFullInDays: diskFullInDays, now: now) else { return }
+        autoCleaning = true
+        autoCleanClock.ran(plan, at: now)
+        if let data = try? JSONEncoder().encode(autoCleanClock) { UserDefaults.standard.set(data, forKey: Self.autoCleanClockKey) }
+        let candidates = plan.quitApps ? policy.appsToQuit(list) : []
+        Task {
+            var quit: [(key: String, name: String, bytes: UInt64)] = []
+            for a in candidates {
+                if await autoQuit(a, now: now) { quit.append((a.group.habitKey, a.group.name, a.group.memoryBytes)) }
+            }
+            let finish = { (trashed: [(item: DiskItem, inTrash: URL)]) in
+                self.autoCleaning = false
+                guard let text = AutoCleanSummary.text(quit: quit.map { ($0.name, $0.bytes) }, trashed: trashed.map(\.item),
+                                                       trigger: plan.trigger) else { return }
+                self.lastAutoClean = AutoCleanUndo(date: now, title: text.title, body: text.body,
+                                                   trashed: trashed, apps: quit.map(\.key))
+                self.notifier.autoCleaned(text)
+            }
+            guard plan.clearBuildFolders else { return finish([]) }
+            // Work from a fresh scan (a refresh takes about a second), never an old list.
+            scanWaiters.append { report in
+                let folders = policy.foldersToTrash(report, now: Date())
+                guard !folders.isEmpty else { return finish([]) }
+                self.trash(folders, automatic: true) { moved, _ in finish(moved) }
+            }
+            scanDisk(byUser: false)
+        }
+    }
+
+    /// Quits one app with nobody asked, if it's still safe to: not in front, and no unsaved
+    /// changes (checked through Accessibility; without it, the app's own save prompt is the
+    /// backstop). Nothing is learned from the quit itself, since it wasn't your answer.
+    private func autoQuit(_ a: Assessment, now: Date) async -> Bool {
+        let key = a.group.habitKey
+        let apps = Self.runningApps(key)
+        guard !apps.isEmpty, !quitting.contains(key), !apps.contains(where: \.isActive) else { return false }
+        if await Self.anyUnsavedDocuments(apps.map(\.processIdentifier)) { return false }
+        // You may have switched to it while the unsaved check ran.
+        let still = Self.runningApps(key)
+        guard !still.isEmpty, !still.contains(where: \.isActive), frontmost?.key != key else { return false }
+        still.forEach { $0.terminate() }
+        kills.recordKill(KillRecord(key: key, name: a.group.name, killedAt: now, source: Self.autoCleanSource,
+                                    memoryBytes: a.group.memoryBytes))
+        autoQuitFeatures[key] = a.features
+        habitStore.log(.autoQuit, key: key, name: a.group.name,
+                       detail: "Idle \(Format.duration(minutes: a.features.minutesSinceActive)), deadweight score \(Int(a.score * 100))%",
+                       bytes: a.group.memoryBytes, at: now)
+        refreshEvents()
+        return true
+    }
+
+    /// How an automatic quit turned out. Reopening it soon after is a "keep" for the habit log
+    /// and the model; staying closed teaches nothing, so the model never trains on its own picks.
+    private func resolveAutoQuit(_ r: KillRecord, _ outcome: KillOutcome, at now: Date) {
+        let minutes = Int(now.timeIntervalSince(r.killedAt) / 60)
+        let features = autoQuitFeatures.removeValue(forKey: r.key)
+        switch outcome {
+        case .relaunched:
+            habitStore.recordDecision(.autoReopened, key: r.key, name: r.name,
+                                      detail: "Reopened \(minutes) min after an automatic clean quit it", at: now)
+            if let features {
+                model.add(TrainingExample(date: now, features: features, label: .keep, source: Self.autoCleanSource))
+                modelStatus = model.status
+                scheduleRetrain()
+            }
+        case .stayedClosed:
+            habitStore.log(.stayedClosed, key: r.key, name: r.name,
+                           detail: "Not reopened within \(Int(KillLabeler.regretWindow / 60)) min of an automatic clean quitting it", at: now)
+        case .neverQuit:
+            habitStore.log(.neverQuit, key: r.key, name: r.name, detail: "Still open \(minutes) min after an automatic clean asked it to quit", at: now)
+        }
+        refreshEvents()
+    }
+
+    /// Undo for the last automatic clean: puts the trashed folders back and reopens the apps.
+    /// Reopening counts as "keep", so the model learns from the mistake. Returns a message naming
+    /// what couldn't go back, or nil. The Activity Log's Undo calls this directly, so it works even
+    /// when macOS doesn't pass a notification button press on to RamClean.
+    @discardableResult
+    func undoAutoClean() -> String? {
+        guard let last = lastAutoClean else {
+            return "RamClean restarted since that clean, so it no longer knows what it moved. Folders it moved are still in the Trash (Put Back in Finder), and apps open as usual."
+        }
+        lastAutoClean = nil
+        if let lt = lastTrashed, Set(lt.items.map(\.item.path)) == Set(last.trashed.map(\.item.path)) { lastTrashed = nil }
+        let failures = putBack(last.trashed)
+        last.apps.forEach(relaunch)
+        return failures.isEmpty ? nil : failures.joined(separator: "\n")
+    }
+
+    /// Hides the Activity Log's Undo for the last automatic clean, leaving everything as it is.
+    func dismissAutoCleanUndo() { lastAutoClean = nil }
+
+    private static func loadAutoCleanClock() -> AutoCleanClock {
+        guard let data = UserDefaults.standard.data(forKey: autoCleanClockKey),
+              let clock = try? JSONDecoder().decode(AutoCleanClock.self, from: data) else { return AutoCleanClock() }
+        return clock
+    }
+
     // MARK: - Disk
 
     /// Scans in the background; the UI shows `diskScanStep` until it's done.
@@ -759,6 +896,9 @@ final class AppModel: ObservableObject {
                 self.saveDiskReport()
                 self.diskScanStep = nil
                 self.lastTrashed = nil
+                let waiters = self.scanWaiters
+                self.scanWaiters = []
+                waiters.forEach { $0(report) }
                 if self.diskAlertWaitingForScan, let s = self.system {
                     self.diskAlertWaitingForScan = false
                     self.sendAlert(AlertRecommender.disk(s, report))
@@ -777,8 +917,15 @@ final class AppModel: ObservableObject {
     /// window, then logs them and remembers them for Undo. Calls back on the main thread with a
     /// message naming any that failed, or nil.
     func moveToTrash(_ items: [DiskItem], done: @escaping (String?) -> Void) {
+        trash(items) { _, failures in done(failures.isEmpty ? nil : failures.joined(separator: "\n")) }
+    }
+
+    /// The work behind Move to Trash; calls back with what went (and where) and what failed.
+    /// `automatic`: an automatic clean's move, logged as such so the Activity Log says who did it.
+    private func trash(_ items: [DiskItem], automatic: Bool = false,
+                       done: @escaping (_ moved: [(item: DiskItem, inTrash: URL)], _ failures: [String]) -> Void) {
         let items = items.filter { $0.canTrash && !trashingPaths.contains($0.path) }
-        guard !items.isEmpty, allowed("Moving files to the Trash") else { done(nil); return }
+        guard !items.isEmpty, allowed("Moving files to the Trash") else { done([], []); return }
         trashingPaths.formUnion(items.map(\.path))
         DispatchQueue.global(qos: .userInitiated).async {
             var moved: [(item: DiskItem, inTrash: URL)] = [], failures: [String] = []
@@ -796,7 +943,7 @@ final class AppModel: ObservableObject {
                 if !moved.isEmpty {
                     let bytes = moved.reduce(Int64(0)) { $0 + max(0, $1.item.bytes ?? 0) }
                     for m in moved {
-                        self.habitStore.log(.movedToTrash, key: "disk", name: m.item.name,
+                        self.habitStore.log(automatic ? .autoTrashed : .movedToTrash, key: "disk", name: m.item.name,
                                             detail: "\(Format.bytes(UInt64(max(0, m.item.bytes ?? 0)))) · \(m.item.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))",
                                             bytes: UInt64(max(0, m.item.bytes ?? 0)), at: Date())
                     }
@@ -808,7 +955,7 @@ final class AppModel: ObservableObject {
                     self.refreshEvents()
                     self.tick()
                 }
-                done(failures.isEmpty ? nil : failures.joined(separator: "\n"))
+                done(moved, failures)
             }
         }
     }
@@ -817,8 +964,18 @@ final class AppModel: ObservableObject {
     func undoTrash(done: @escaping (String?) -> Void) {
         guard let last = lastTrashed else { done(nil); return }
         lastTrashed = nil
+        let failures = putBack(last.items)
+        // If that batch was an automatic clean's, its folders are back now; keep only its app half.
+        if let auto = lastAutoClean, Set(auto.trashed.map(\.item.path)).isSubset(of: Set(last.items.map(\.item.path))) {
+            lastAutoClean = auto.apps.isEmpty ? nil : AutoCleanUndo(date: auto.date, title: auto.title, body: auto.body, trashed: [], apps: auto.apps)
+        }
+        done(failures.isEmpty ? nil : failures.joined(separator: "\n"))
+    }
+
+    /// Moves trashed items back to where they were; returns a line per item that couldn't go back.
+    private func putBack(_ items: [(item: DiskItem, inTrash: URL)]) -> [String] {
         var back: [DiskItem] = [], failures: [String] = []
-        for m in last.items {
+        for m in items {
             do {
                 try FileManager.default.moveItem(at: m.inTrash, to: URL(fileURLWithPath: m.item.path))
                 back.append(m.item)
@@ -836,7 +993,7 @@ final class AppModel: ObservableObject {
             refreshEvents()
             tick()
         }
-        done(failures.isEmpty ? nil : failures.joined(separator: "\n"))
+        return failures
     }
 
     /// Runs an item's own cleanup command (e.g. `xcrun simctl delete unavailable`) in the background
@@ -1099,4 +1256,15 @@ enum Format {
         ByteCountFormatter.string(fromByteCount: Int64(b), countStyle: .memory)
     }
     static func duration(minutes m: Double) -> String { HumanFormat.duration(minutes: m) }
+}
+
+/// What the last automatic clean did, so it can be undone from the Activity Log.
+struct AutoCleanUndo {
+    var date: Date
+    /// The notification's text, e.g. "Freed 2.9 GB of memory" / "Quit Xcode (idle, marked deadweight); …".
+    var title: String
+    var body: String
+    var trashed: [(item: DiskItem, inTrash: URL)]
+    /// Habit keys of the apps it quit, reopened on Undo.
+    var apps: [String]
 }

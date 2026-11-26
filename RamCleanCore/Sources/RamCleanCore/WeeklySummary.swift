@@ -64,9 +64,14 @@ public struct WeeklySummary: Equatable, Sendable {
                     s.quits += 1
                     s.memoryFreed += e.bytes ?? 0
                 }
+            case .autoQuit:
+                if !neverQuit(events, after: i) {
+                    s.quits += 1
+                    s.memoryFreed += e.bytes ?? 0
+                }
             case .kept, .alwaysKept: s.dismissed += 1
-            case .regretRelaunch: s.reopened += 1
-            case .movedToTrash, .cleanedUp, .movedOffMac:
+            case .regretRelaunch, .autoReopened: s.reopened += 1
+            case .movedToTrash, .autoTrashed, .cleanedUp, .movedOffMac:
                 s.diskItems += 1
                 s.diskReclaimed += e.bytes ?? 0
             case .putBack:
@@ -101,14 +106,25 @@ public struct WeeklySummary: Equatable, Sendable {
     static func learned(_ events: [HabitEvent]) -> [String: LearnedApp] {
         var answers: [String: [HabitAnswer]] = [:]
         var names: [String: String] = [:]
+        // Apps an automatic clean quit and that haven't settled yet: a "didn't quit" then is
+        // about that quit, which wasn't an answer, so it mustn't take back one of yours.
+        var autoPending = Set<String>()
         for e in events {
             var a = answers[e.key] ?? []
             switch e.kind {
+            case .autoQuit: autoPending.insert(e.key); continue
+            case .stayedClosed: autoPending.remove(e.key); continue
             case .kept, .alwaysKept: a.append(.kept)
-            case .quitBySuggestion: a.append(.quit)
+            case .quitBySuggestion:
+                autoPending.remove(e.key)
+                a.append(.quit)
+            case .autoReopened:
+                autoPending.remove(e.key)
+                a.append(.kept)
             case .regretRelaunch:
                 if a.last == .quit { a[a.count - 1] = .kept } else { a.append(.kept) }
             case .neverQuit:
+                if autoPending.remove(e.key) != nil { continue }
                 if a.last == .quit { a.removeLast() }
             case .forgotten: a = []
             default: continue
@@ -135,7 +151,7 @@ public struct WeeklySummary: Equatable, Sendable {
         for e in events[(index + 1)...] where e.key == key {
             switch e.kind {
             case .neverQuit: return true
-            case .stayedClosed, .regretRelaunch, .quitBySuggestion: return false
+            case .stayedClosed, .regretRelaunch, .autoReopened, .quitBySuggestion, .autoQuit: return false
             default: continue
             }
         }

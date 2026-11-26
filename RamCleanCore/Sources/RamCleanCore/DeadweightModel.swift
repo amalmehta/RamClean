@@ -24,8 +24,6 @@ public struct ModelStatus: Codable, Equatable, Sendable {
     public var examples = 0
     public var deadweightExamples = 0
     public var keepExamples = 0
-    /// Accuracy on held-out answers (every fifth one), once there are 20+.
-    public var holdoutAccuracy: Double?
     public var trainedAt: Date?
     public var message = "Waiting for your first answers"
     /// How much the model counts vs. the rule of thumb (0…0.85).
@@ -151,6 +149,12 @@ public final class DeadweightModel {
         return true
     }
 
+    /// How many answers came from `source` ("manual quit", "notification", …).
+    public func count(source: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return examples.filter { $0.source == source }.count
+    }
+
     /// Drops every answer about one app, so the next training relearns it from scratch.
     /// Returns how many were dropped.
     @discardableResult
@@ -189,16 +193,6 @@ public final class DeadweightModel {
             return s
         }
         do {
-            if rows.count >= 20 {
-                let test = rows.enumerated().filter { $0.offset % 5 == 4 }.map(\.element)
-                let train = rows.enumerated().filter { $0.offset % 5 != 4 }.map(\.element)
-                if Set(train.map(\.label)).count == 2 {
-                    let holdout = try Self.fit(train)
-                    let seen = Set(train.map(\.features.bundleID))
-                    let metrics = holdout.evaluation(on: try Self.table(test.map { Self.generalized($0, known: seen) }))
-                    if metrics.isValid { s.holdoutAccuracy = 1 - metrics.classificationError }
-                }
-            }
             let classifier = try Self.fit(rows)
             let mlModel = classifier.model
             let output = mlModel.modelDescription.predictedProbabilitiesName

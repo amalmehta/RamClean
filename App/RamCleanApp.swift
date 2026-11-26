@@ -59,6 +59,8 @@ struct MenuBarLabel: View {
         .onAppear {
             model.openMainWindow = { openWindow(id: "main") }
             model.openSettings = { openSettings() }
+            // Until setup is done, open the window (which shows it) even if it was closed last time.
+            if !SetupView.isDone { openWindow(id: "main") }
         }
     }
 }

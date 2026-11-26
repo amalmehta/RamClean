@@ -141,7 +141,7 @@ struct ModelView: View {
                     }
                 }
                 LabeledContent("Your answers", value: "\(s.examples)  (\(s.deadweightExamples) quit · \(s.keepExamples) kept)")
-                LabeledContent("Held-out accuracy", value: s.holdoutAccuracy.map { "\(Int($0 * 100))%" } ?? "Needs 20+ answers")
+                LabeledContent("From quitting apps yourself", value: "\(model.manualQuitAnswers)")
                 LabeledContent("Model's share of the score", value: "\(Int(s.modelWeight * 100))%")
                 if let t = s.trainedAt { LabeledContent("Last trained", value: t.formatted(date: .abbreviated, time: .shortened)) }
                 Text(s.message).font(.caption).foregroundStyle(.secondary)
@@ -149,7 +149,8 @@ struct ModelView: View {
             Section("How it learns") {
                 Text("""
                 Every time you tap **Quit** or **Keep** — in a notification, the menu bar or this window — RamClean saves the app's numbers at that moment with your answer. \
-                If you reopen an app within 30 minutes of RamClean quitting it, that answer flips to "keep".
+                If you reopen an app within 30 minutes of RamClean quitting it, that answer flips to "keep". \
+                Quitting an app yourself that you haven't had in front for a minute counts as a "quit" answer too (at most one per app a day), and flips to "keep" if you reopen it within 30 minutes.
 
                 A Create ML boosted-tree classifier trains on those answers on this Mac (nothing leaves it). Until there are \(DeadweightModel.minExamples)+ answers with at least \(DeadweightModel.minPerClass) of each kind, \
                 RamClean uses rules of thumb; after that it blends the two, trusting the model more as answers pile up (up to 85%).

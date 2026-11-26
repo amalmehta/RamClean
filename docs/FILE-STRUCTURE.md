@@ -19,6 +19,7 @@ RamClean/
 │   ├── HabitsAndModelViews.swift Habits table, Activity Log, Model page
 │   ├── MenuBarView.swift         Menu bar popover
 │   ├── SettingsAndFeedback.swift Settings tabs (General, Thresholds, Protection, Data, Licence) and the Feedback sheet
+│   ├── SetupView.swift           First-run setup sheet: Open at login, notifications, Accessibility, where data lives
 │   ├── Updater.swift             Sparkle auto-updates (Check for Updates…)
 │   ├── RecommendationViews.swift Popovers behind the Memory, CPU and Disk bars (what to quit, what to clear)
 │   ├── Components.swift          Usage bars, app icons, verdict badges, the trial/licence badge
@@ -43,6 +44,7 @@ RamClean/
 │   │   ├── QuitReason.swift      The short reason on each quit suggestion
 │   │   ├── DiskScanner.swift     What to clear or move: caches, stale project builds, unused apps, old downloads, large files, Trash
 │   │   ├── KillLedger.swift      Follows apps RamClean quit for 30 minutes to learn whether you wanted them back
+│   │   ├── ManualQuit.swift      When quitting an app yourself teaches the model "deadweight", and when reopening flips it
 │   │   ├── Forecast.swift        Disk-full forecast and apps whose memory has swollen
 │   │   ├── Alerts.swift          Threshold alerts (memory, CPU, disk) and the recommendations they carry
 │   │   ├── AutoClean.swift       Automatic clean: when it's due, which apps and build folders it may touch, its notice

@@ -608,3 +608,5 @@ CHANGELOG:
 - 2026-11-24 — the Activity Log marks folders the automatic clean moved ("Moved to Trash automatically")
 - 2026-11-24 — while RamClean is free it no longer reads the Keychain, so rebuilds stop asking for the login password
 - 2026-11-24 — Undo for the automatic clean in the Activity Log too (notification button presses weren't reaching the app); "Last clean" in Settings now updates while open
+- 2026-11-25 — quitting an app yourself (Cmd-Q, the Dock) that you haven't had in front for a minute teaches the model "deadweight" (source "manual quit"); the Model tab counts these answers
+- 2026-11-26 — removed the Model tab's held-out accuracy (near-identical answers in training and test made it look better than it was); manual quits count at most once per app a day and flip to "keep" if you reopen the app within 30 minutes; a first-run Set up RamClean sheet for Open at login, notifications and Accessibility

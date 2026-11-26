@@ -94,12 +94,7 @@ private struct GeneralSettings: View {
     /// RamClean only watches while it's running, so opening at login keeps its habit
     /// data and alerts going after a restart.
     private func setOpenAtLogin(_ on: Bool) {
-        loginError = nil
-        do {
-            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-        } catch {
-            loginError = "Couldn't \(on ? "turn on" : "turn off") Open at login: \(error.localizedDescription)"
-        }
+        loginError = LoginItem.set(on)
         login = SMAppService.mainApp.status
     }
 }

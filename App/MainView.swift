@@ -19,6 +19,8 @@ struct MainView: View {
     @EnvironmentObject var model: AppModel
     @State private var section: SidebarItem = .overview
     @State private var showFeedback = false
+    /// The first time the window opens: Open at login, notifications and Accessibility in one place.
+    @State private var showSetup = !SetupView.isDone
 
     var body: some View {
         NavigationSplitView {
@@ -70,6 +72,7 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $showFeedback) { FeedbackView() }
+        .sheet(isPresented: $showSetup) { SetupView() }
         // "Show recommendations" on an alert lands on the Overview with that bar's list open.
         .onChange(of: model.requestedPanel) { _, p in if p != nil { section = .overview } }
         // The Monday summary notification lands on This Week.
